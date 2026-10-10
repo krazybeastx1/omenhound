@@ -23,10 +23,10 @@ func TestPlanMethodsAllReportsUnimplemented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops"}) {
+	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops", "acl"}) {
 		t.Fatalf("all implemented = %v", p.Implemented)
 	}
-	want := map[string]bool{"localadmin": true, "session": true, "trusts": true, "acl": true, "container": true, "dcom": true, "rdp": true, "psremote": true, "loggedon": true}
+	want := map[string]bool{"localadmin": true, "session": true, "trusts": true, "container": true, "dcom": true, "rdp": true, "psremote": true, "loggedon": true}
 	if len(p.Skipped) != len(want) {
 		t.Fatalf("all skipped = %v, want %d entries", p.Skipped, len(want))
 	}
@@ -42,26 +42,28 @@ func TestPlanMethodsDConly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops"}) {
+	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops", "acl"}) {
 		t.Fatalf("dc implemented = %v", p.Implemented)
 	}
-	for _, m := range []string{"trusts", "acl", "container"} {
+	for _, m := range []string{"trusts", "container"} {
 		if !contains(p.Skipped, m) {
 			t.Errorf("dc should skip %q, got %v", m, p.Skipped)
 		}
 	}
 }
 
-func TestPlanMethodsUnimplementedOnly(t *testing.T) {
+func TestPlanMethodsACLAlone(t *testing.T) {
+	// `-c acl` is now implemented: the ACL pass is self-sufficient, so it no
+	// longer needs group/objectprops to have run first.
 	p, err := PlanMethods("acl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Implemented) != 0 {
-		t.Fatalf("acl should implement nothing, got %v", p.Implemented)
+	if !reflect.DeepEqual(p.Implemented, []string{"acl"}) {
+		t.Fatalf("acl implemented = %v", p.Implemented)
 	}
-	if !reflect.DeepEqual(p.Skipped, []string{"acl"}) {
-		t.Fatalf("acl skipped = %v", p.Skipped)
+	if len(p.Skipped) != 0 {
+		t.Fatalf("acl skipped = %v, want none", p.Skipped)
 	}
 }
 
@@ -70,11 +72,11 @@ func TestPlanMethodsMixedAndDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops"}) {
+	if !reflect.DeepEqual(p.Implemented, []string{"group", "acl", "objectprops"}) {
 		t.Fatalf("implemented = %v", p.Implemented)
 	}
-	if !reflect.DeepEqual(p.Skipped, []string{"acl"}) {
-		t.Fatalf("skipped = %v", p.Skipped)
+	if len(p.Skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", p.Skipped)
 	}
 }
 

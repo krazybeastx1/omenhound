@@ -48,10 +48,26 @@ Requested methods are planned up front. What OmenHound can't collect yet is repo
 | `localadmin` | ✓ | not implemented |
 | `session` / `loggedon` | ✓ | not implemented |
 | `trusts` | ✓ | not implemented |
-| `acl` | ✓ | not implemented |
+| `acl` | ✓ | **✓** (see status note) |
 | `container` | ✓ | not implemented |
 | `dcom` / `rdp` / `psremote` | ✓ | not implemented |
 | `all`, `default` | ✓ | expand to the above |
+
+**ACL collection is now native** (`-c acl`). OmenHound reads each object's
+`nTSecurityDescriptor` (owner + DACL) and applies the same ACE→edge rules as
+BloodHound.py: `Owns`, `GenericAll`, `GenericWrite`, `WriteDacl`, `WriteOwner`,
+`AddMember`, `AddSelf`, `AllExtendedRights`, `GetChanges`, `GetChangesAll`,
+`GetChangesInFilteredSet`, `ForceChangePassword`, `ReadLAPSPassword`, `WriteSPN`,
+`AddKeyCredentialLink`, `WriteAccountRestrictions`, `AddAllowedToAct`,
+`WriteGPLink`. The pass is self-sufficient — it also creates the OU/GPO/container
+nodes it needs — so `-c acl` works on its own.
+
+> **Validation status.** The descriptor parser and the ACE→edge mapping are
+> unit-tested against security descriptors built to `[MS-DTYP]` and independently
+> re-parsed with **impacket** (the library BloodHound.py itself uses). The **live
+> LDAP path** — schema GUID fetch, the `LDAP_SERVER_SD_FLAGS` control, and the
+> per-object searches — is **code-only**: no AD lab was available to run it end to
+> end, so treat first contact with a real DC as unverified.
 
 Where a gap exists, **import** is the bridge: collect the missing data with
 BloodHound.py/CE and `omenhound import` it. The graph then contains those edges (ACL

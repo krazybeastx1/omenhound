@@ -13,9 +13,9 @@ import (
 	"github.com/krazybeastx1/omenhound/pkg/model"
 )
 
-// LDAPCollector enumerates users, groups, and computers and their group
-// membership over LDAP/LDAPS. ACL, session, and trust collection are planned
-// (see docs/ARCHITECTURE.md) and intentionally not attempted here.
+// LDAPCollector enumerates users, groups, computers, their group membership,
+// and (with -c acl) object security descriptors over LDAP/LDAPS. Session, trust,
+// and container collection are planned (see docs/ARCHITECTURE.md).
 type LDAPCollector struct{}
 
 // Name implements Collector.
@@ -40,7 +40,8 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 	}
 	if o.Methods != nil && len(o.Methods.Implemented) == 0 {
 		return nil, fmt.Errorf("ldap: none of the requested collection methods are implemented "+
-			"(requested: %s; implemented: group, objectprops)", strings.Join(o.Methods.Requested, ","))
+			"(requested: %s; implemented: %s)", strings.Join(o.Methods.Requested, ","),
+			strings.Join(implementedMethodList, ", "))
 	}
 	ctx, cancel := context.WithTimeout(ctx, o.EffectiveTimeout())
 	defer cancel()
@@ -155,6 +156,15 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 		}
 	}
 
+	// ACL collection (`-c acl`). It re-reads the objects it needs with the
+	// security-descriptor control rather than burdening the passes above, and
+	// creates any node (OU/GPO/container) the base passes did not.
+	if methodRequested(o.Methods, "acl") {
+		if err := collectACL(conn, o, g, dnIndex, baseDN); err != nil {
+			return nil, err
+		}
+	}
+
 	g.Meta.FinishedAt = time.Now().UTC()
 	return g, nil
 }
@@ -197,7 +207,13 @@ func searchBase(conn *ldap.Conn, baseDN string, attrs []string) (*ldap.Entry, er
 }
 
 func eachEntry(conn *ldap.Conn, baseDN, filter string, attrs []string, fn func(*ldap.Entry)) error {
-	req := ldap.NewSearchRequest(baseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, ldapSearchTimeLim, false, filter, attrs, nil)
+	return eachEntryWithControls(conn, baseDN, filter, attrs, ldap.ScopeWholeSubtree, nil, fn)
+}
+
+// eachEntryWithControls is eachEntry with an explicit scope and extra controls
+// (used by the ACL collector to request nTSecurityDescriptor).
+func eachEntryWithControls(conn *ldap.Conn, baseDN, filter string, attrs []string, scope int, ctrls []ldap.Control, fn func(*ldap.Entry)) error {
+	req := ldap.NewSearchRequest(baseDN, scope, ldap.NeverDerefAliases, 0, ldapSearchTimeLim, false, filter, attrs, ctrls)
 	res, err := conn.SearchWithPaging(req, ldapPageSize)
 	if err != nil {
 		return fmt.Errorf("ldap: search %q: %w", filter, err)

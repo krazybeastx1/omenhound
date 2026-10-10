@@ -151,7 +151,7 @@ type Edge struct {
 
 Edges are **directed Source -> Target**. `Graph.AddEdge` de-duplicates on
 `(Source, Target, Kind)`, making ingestion idempotent: replaying a graph is a
-no-op. `Props` carries `inherited`, `isacl`, `lastseen`, and ACE
+no-op. `Props` carries `inherited`, `isaclprotected`, `lastseen`, and ACE
 rights/inheritance details.
 
 ### 3.5 Graph, Meta, and the wire format
@@ -257,13 +257,36 @@ Primary collector, built on `go-ldap`:
    (`groupPolicyContainer`) → `displayName`, `gPCFileSysPath`, `gPLink`,
    `gPOptions`; **OUs/Containers** for structure and GPO linkage; **Domains** →
    `trustDirection`, `trustPartner`, `trustType`, `trustAttributes`.
-4. **ACL collection.** Read `nTSecurityDescriptor` (requesting the
-   `LDAP_SERVER_SD_FLAGS_OID` control as needed), parse the DACL, and map each
-   ACE's `AccessMask` + trustee SID + object-type GUID to an `EdgeKind`
-   (`ADS_RIGHT_GENERIC_ALL` → `GenericAll`; `WD`/`WO`/`DC` bits →
-   `WriteDacl`/`WriteOwner`; extended-right GUIDs → `DCSync`,
-   `ForceChangePassword`, `AllowedToAct`, …). Inheritance flags land in
-   `Edge.Props["inherited"]`.
+4. **ACL collection** (`-c acl`; `ldap_acl.go`, `adacl.go`,
+   `security_descriptor.go`). Read `nTSecurityDescriptor` under the
+   `LDAP_SERVER_SD_FLAGS_OID` control (owner + DACL), parse the self-relative
+   `SECURITY_DESCRIPTOR`, and map each ACE to an `EdgeKind` with the same rules
+   as BloodHound.py's `ACLProcessor`: `GENERIC_ALL` → `GenericAll`; `WD`/`WO` →
+   `WriteDacl`/`WriteOwner`; `ADS_RIGHT_DS_WRITE_PROP` + property GUID →
+   `AddMember`, `WriteSPN`, `AddKeyCredentialLink`, `WriteGPLink`,
+   `AddAllowedToAct`, `WriteAccountRestrictions`; `ADS_RIGHT_DS_CONTROL_ACCESS`
+   + extended-right GUID → `GetChanges`, `GetChangesAll`,
+   `GetChangesInFilteredSet`, `ForceChangePassword`, `AllExtendedRights`;
+   `ADS_RIGHT_DS_READ_PROP` + a LAPS attribute → `ReadLAPSPassword`. Class and
+   attribute GUIDs are resolved from the live schema (`(schemaIDGUID=*)`), never
+   hard-coded. The owner yields `Owns` unless it is CREATOR OWNER / LOCAL SYSTEM
+   / SELF. Inheritance flags land in `Edge.Props["inherited"]`;
+   `SE_DACL_PROTECTED` (0x1000) lands in `Node.Props["isaclprotected"]`.
+
+   The pass is **self-sufficient** — it creates the OU/GPO/container nodes and
+   any ACE-principal nodes the base walk did not (well-known SIDs get real names,
+   unknown SIDs become `Base` placeholders), so the graph stays referentially
+   closed even for `-c acl` alone. Objects that return no descriptor (missing
+   `READ_CONTROL`), ACE types other than allow / allow-object, and inherited ACEs
+   whose target class did not apply are **counted and reported** in
+   `Meta.Warnings`; nothing is fabricated.
+
+   *Validation status.* The binary descriptor parser and the ACE→edge mapping are
+   unit-tested against descriptors built byte-for-byte to `[MS-DTYP]` and
+   independently re-parsed with impacket's `ldaptypes` (the library BloodHound.py
+   uses). The **live LDAP path is code-only**: with no AD lab available, the
+   schema fetch, the SD-flags control, and the per-object searches have not been
+   exercised against a domain controller.
 5. **Membership edges.** `primaryGroupID` is not in `member`, so a `MemberOf`
    edge is synthesized from `primaryGroupID` + domain SID.
 6. **Materialize** a `model.Graph` with `Meta.Collector = "ldap"`.
@@ -563,7 +586,8 @@ keeping the public API surface to exactly one package.
 - **Phase 3 — Neo4j backend.** `neo4j.go` + constraints/indexes; verify CE
   queries run against a populated DB. Deliverable: CE compatibility smoke test.
 - **Phase 4 — LDAP + SMB collection.** `ldap.go` (users/groups/computers/OUs/
-  GPOs/ACLs/membership/trusts, paging, primary-group synthesis) and `smb.go`
+  GPOs/membership/trusts, paging, primary-group synthesis), `ldap_acl.go` +
+  `adacl.go` + `security_descriptor.go` (ACL edges — **done**), and `smb.go`
   (sessions, local admin, remote-access edges, TTL/expiry wiring).
 - **Phase 5 — Abuse renderer.** `internal/abuse` templates + OPSEC, wired to
   `/api/v1/abuse`.

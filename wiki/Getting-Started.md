@@ -86,17 +86,22 @@ Example with SRV discovery and a CE-compatible archive:
 
 ### Collection methods (honest partial support)
 
-OmenHound currently implements the **`group`** and **`objectprops`** methods (users,
-groups, computers, membership and their properties). Any other method you request is
-reported explicitly — never silently dropped:
+OmenHound implements the **`group`**, **`objectprops`**, and **`acl`** methods (users,
+groups, computers, membership, their properties, and object security descriptors → ACL
+edges). Any other method you request is reported explicitly — never silently dropped:
 
 ```
-collect: WARNING: collection method "acl" is not implemented — skipped
 collect: WARNING: collection method "session" is not implemented — skipped
+collect: WARNING: collection method "trusts" is not implemented — skipped
 ```
 
-If you ask for **only** unimplemented methods (e.g. `-c acl`), the collector **refuses
-to run** rather than pretending it collected something.
+If you ask for **only** unimplemented methods (e.g. `-c session`), the collector
+**refuses to run** rather than pretending it collected something.
+
+The `acl` pass is self-sufficient: `-c acl` on its own emits the ACL edges and creates
+the `OU`/`GPO`/`Container` nodes it needs. One caveat on validation — the descriptor
+parser and ACE mapping are tested against **impacket**-generated descriptors, but the
+live LDAP path has not yet been exercised against a real domain controller.
 
 See **[Coming from BloodHound.py](Coming-from-BloodHound-py)** for the full method table.
 

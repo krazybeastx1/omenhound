@@ -59,7 +59,7 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 
 | Piece | What it does |
 |---|---|
-| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership) and emits a graph. BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. ACL/session/trust enrichment on the roadmap. |
+| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership, and — with `-c acl` — object security descriptors → ACL edges) and emits a graph. BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. Session/trust enrichment on the roadmap. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
 | **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. |
@@ -270,7 +270,8 @@ or a database.
 - [x] BloodHound CE JSON / BloodHound.py `--zip` **import** and CE-archive **export**
 - [x] BloodHound.py-compatible collection flags, method planning, SRV DC discovery
 - [x] Token-gated write API in the web UI
-- [ ] ACL (`nTSecurityDescriptor`/SDDL) → `GenericAll`/`WriteDacl`/… edges
+- [x] ACL (`nTSecurityDescriptor`) → `Owns`/`GenericAll`/`WriteDacl`/`GetChanges`/… edges
+      *(parser and ACE mapping unit-tested against impacket-generated descriptors; the live LDAP path is code-only — no AD lab)*
 - [ ] SMB session & local-admin (`AdminTo`, `CanPSRemote`, `HasSession`)
 - [ ] GPO, OU, trust collection
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry

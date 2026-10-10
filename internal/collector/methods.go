@@ -25,10 +25,32 @@ var bloodhoundMethods = []string{
 	"container", "dcom", "rdp", "psremote", "loggedon",
 }
 
-// implementedMethods are the methods OmenHound's LDAP collector can perform.
-var implementedMethods = map[string]bool{
-	"group":       true, // users/groups/computers + membership
-	"objectprops": true, // object properties (plus the base objects above)
+// implementedMethodList is the ordered list of methods OmenHound's LDAP
+// collector can perform. It is exported to operators in error/warning text, so
+// it has a single source of truth here.
+var implementedMethodList = []string{"group", "objectprops", "acl"}
+
+// implementedMethods is the lookup form of implementedMethodList.
+var implementedMethods = func() map[string]bool {
+	m := make(map[string]bool, len(implementedMethodList))
+	for _, k := range implementedMethodList {
+		m[k] = true
+	}
+	return m
+}()
+
+// methodRequested reports whether an implemented method was requested. A nil
+// plan means the default profile (group + objectprops), which never includes acl.
+func methodRequested(m *MethodPlan, name string) bool {
+	if m == nil {
+		return false
+	}
+	for _, x := range m.Implemented {
+		if x == name {
+			return true
+		}
+	}
+	return false
 }
 
 // PlanMethods resolves a comma-separated -c/--collectionmethod value. An empty

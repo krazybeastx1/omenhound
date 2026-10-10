@@ -7,6 +7,16 @@ every gap is reported rather than faked. This page is the current boundary.
 
 - **Collector** — LDAP simple bind over **LDAPS**; users, groups, computers, domains and
   group membership; SRV-based DC discovery; BloodHound.py-compatible flags.
+- **ACL collection** (`-c acl`) — reads each object's `nTSecurityDescriptor` (owner +
+  DACL) and emits the same edges BloodHound.py would: `Owns`, `GenericAll`,
+  `GenericWrite`, `WriteDacl`, `WriteOwner`, `AddMember`, `AddSelf`,
+  `AllExtendedRights`, `GetChanges`, `GetChangesAll`, `GetChangesInFilteredSet`,
+  `ForceChangePassword`, `ReadLAPSPassword`, `WriteSPN`, `AddKeyCredentialLink`,
+  `WriteAccountRestrictions`, `AddAllowedToAct`, `WriteGPLink`. The pass is
+  self-sufficient: it also creates the `OU`/`GPO`/`Container` nodes and any missing
+  ACE-principal nodes. *Status:* the descriptor parser and ACE→edge mapping are
+  unit-tested against **impacket**-generated descriptors; the live LDAP path is
+  **code-only** (no AD lab available).
 - **BloodHound CE interop** — import CE v5 JSON / BloodHound.py `--zip` (with ACE,
   session, local-admin, delegation, trust and GPO-link mapping), and export a native CE
   v5 archive via `--zip`.
@@ -26,7 +36,6 @@ every gap is reported rather than faked. This page is the current boundary.
 | Item | Notes |
 |---|---|
 | **Native CLI parity** | Broaden direct collection so fewer gaps need an import bridge. |
-| **ACL / SDDL collection** | Enumerate `nTSecurityDescriptor` and emit the ACL-derived edges natively. |
 | **Sessions & local-admin** | SMB/NetSession enumeration and `AdminTo`/`CanRDP`/`CanPSRemote` results. |
 | **GPO / OU / trust collection** | Complete `GPLink`, `Contains` and `TrustedBy` collection natively. |
 | **Incremental merge** | SID-keyed incremental re-collection with **stale-edge expiry** (edges carry `first_seen`/`last_seen`). |
