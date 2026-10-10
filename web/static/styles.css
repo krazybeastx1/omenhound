@@ -34,3 +34,17 @@ ul.edges .k{color:var(--accent2);font-weight:600}
 .legend span{display:inline-flex;align-items:center;gap:6px;margin-right:10px}
 .legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
 .foot{display:flex;justify-content:space-between;padding:6px 14px;color:var(--muted);border-top:1px solid var(--line);background:var(--panel);font-size:12px}
+button.lock{border-color:var(--warn);color:var(--warn)}
+button.lock.unlocked{border-color:var(--accent2);color:var(--accent2)}
+.modal{position:fixed;inset:0;background:rgba(4,6,10,.72);display:flex;align-items:center;justify-content:center;z-index:20;backdrop-filter:blur(2px)}
+.modal[hidden]{display:none}
+.modal-card{width:min(620px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+.modal-card h2{margin-top:0}
+.field{display:block;margin:12px 0}
+.field>span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.field input,.field textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:9px 11px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.field input:focus,.field textarea:focus{outline:none;border-color:var(--accent)}
+.field textarea{resize:vertical;min-height:120px}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#07101f;font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}

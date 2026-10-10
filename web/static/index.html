@@ -12,6 +12,7 @@
   <div class="stats" id="stats">loading…</div>
   <div class="spacer"></div>
   <input id="search" type="search" placeholder="filter by name / sAMAccountName / SID" autocomplete="off" />
+  <button id="push" class="lock" title="graph-modifying endpoints require an operator token">🔒 Write API</button>
   <button id="reload" title="reload graph">Reload</button>
 </header>
 
@@ -50,6 +51,24 @@
     </section>
   </aside>
 </main>
+
+<div class="modal" id="gate" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+    <h2 id="gate-title">🔒 Write API locked</h2>
+    <p class="muted">Modifying the graph requires an operator bearer token. The token is held in this tab's memory only and is never persisted or sent anywhere except the local API.</p>
+    <label class="field"><span>Operator token</span>
+      <input id="gate-token" type="password" placeholder="OMENHOUND_API_TOKEN" autocomplete="off" spellcheck="false" />
+    </label>
+    <label class="field"><span>Graph JSON to ingest</span>
+      <textarea id="gate-json" rows="7" spellcheck="false" placeholder='{"nodes":[],"edges":[]}'></textarea>
+    </label>
+    <div class="modal-actions">
+      <button id="gate-cancel">Cancel</button>
+      <button id="gate-push" class="primary">Push to /api/v1/ingest</button>
+    </div>
+    <p id="gate-status" class="muted" aria-live="polite"></p>
+  </div>
+</div>
 
 <footer class="foot">
   <span id="health"></span>

@@ -341,12 +341,70 @@ document.getElementById("search").addEventListener("input", (ev) => {
 });
 document.getElementById("reload").addEventListener("click", refresh);
 
+// ---- write-API auth gate ----
+// The UI is read-only by default. Graph-modifying endpoints require an operator
+// bearer token; the gate keeps the token in memory for this tab only.
+let operatorToken = null;
+const gate = document.getElementById("gate");
+
+function setLock(unlocked) {
+  const b = document.getElementById("push");
+  b.textContent = unlocked ? "🔓 Write API" : "🔒 Write API";
+  b.classList.toggle("unlocked", unlocked);
+}
+
+function openGate() {
+  document.getElementById("gate-status").textContent = "";
+  gate.hidden = false;
+  document.getElementById("gate-token").focus();
+}
+function closeGate() { gate.hidden = true; }
+
+document.getElementById("push").addEventListener("click", openGate);
+document.getElementById("gate-cancel").addEventListener("click", closeGate);
+gate.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeGate(); });
+
+document.getElementById("gate-push").addEventListener("click", async () => {
+  const token = document.getElementById("gate-token").value.trim();
+  const body = document.getElementById("gate-json").value.trim();
+  const status = document.getElementById("gate-status");
+  if (!token || !body) {
+    status.className = "warn";
+    status.textContent = "an operator token and graph JSON are both required";
+    return;
+  }
+  status.className = "muted";
+  status.textContent = "pushing…";
+  try {
+    const res = await fetch("/api/v1/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body,
+    });
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.className = "warn";
+      status.textContent = `denied: ${r.error || res.statusText}`;
+      return;
+    }
+    operatorToken = token;
+    setLock(true);
+    status.className = "muted";
+    status.textContent = `ok: ${r.nodes} nodes, ${r.edges} edges ingested`;
+    await refresh();
+  } catch (err) {
+    status.className = "warn";
+    status.textContent = "error: " + err.message;
+  }
+});
+
 async function refresh() {
   await loadGraph();
   const res = await fetch("/api/v1/health");
   const h = await res.json();
   document.getElementById("health").textContent =
     `v${h.version} · credential-ops ${h.credential_ops_enabled ? "ON" : "off"} · write-api ${h.write_api_enabled ? "ON" : "off"}`;
+  setLock(!!operatorToken);
 }
 
 resize();
