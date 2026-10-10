@@ -1,0 +1,225 @@
+package bloodhound
+
+import (
+	"archive/zip"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/krazybeastx1/omenhound/internal/ingest"
+	"github.com/krazybeastx1/omenhound/pkg/model"
+)
+
+// fixture is a minimal but representative BloodHound CE (`--zip`) collection.
+var fixture = map[string]string{
+	"bh_users.json": `{"data":[
+		{"ObjectIdentifier":"S-1-5-21-1-2-3-1103",
+		 "Properties":{"name":"JDOE@CORP.LOCAL","domain":"CORP.LOCAL","samaccountname":"jdoe",
+		   "distinguishedname":"CN=JDOE,OU=USERS,DC=CORP,DC=LOCAL","enabled":true,"admincount":1},
+		 "PrimaryGroupSID":"S-1-5-21-1-2-3-513",
+		 "MemberOf":[{"ObjectIdentifier":"S-1-5-21-1-2-3-513","ObjectType":"Group"}],
+		 "Aces":[],"IsDeleted":false}],
+		"meta":{"type":"users","count":1,"version":5}}`,
+	"bh_groups.json": `{"data":[
+		{"ObjectIdentifier":"S-1-5-21-1-2-3-512",
+		 "Properties":{"name":"DOMAIN ADMINS@CORP.LOCAL","domain":"CORP.LOCAL","highvalue":true},
+		 "Members":[{"ObjectIdentifier":"S-1-5-21-1-2-3-1103","ObjectType":"User"}],
+		 "Aces":[{"PrincipalSID":"S-1-5-21-1-2-3-1103","PrincipalType":"User","RightName":"GenericAll","IsInherited":false},
+		         {"PrincipalSID":"S-1-5-21-1-2-3-1103","PrincipalType":"User","RightName":"BogusRight","IsInherited":false}],
+		 "IsDeleted":false}],
+		"meta":{"type":"groups","count":1,"version":5}}`,
+	"bh_computers.json": `{"data":[
+		{"ObjectIdentifier":"S-1-5-21-1-2-3-1003",
+		 "Properties":{"name":"WS01.CORP.LOCAL","domain":"CORP.LOCAL","samaccountname":"WS01$",
+		   "distinguishedname":"CN=WS01,OU=WORKSTATIONS,DC=CORP,DC=LOCAL"},
+		 "PrimaryGroupSID":"S-1-5-21-1-2-3-515",
+		 "LocalAdmins":{"Collected":true,"Results":[{"ObjectIdentifier":"S-1-5-21-1-2-3-512","ObjectType":"Group"}]},
+		 "RemoteDesktopUsers":{"Collected":true,"Results":[{"ObjectIdentifier":"S-1-5-21-1-2-3-1103","ObjectType":"User"}]},
+		 "PSRemoteUsers":{"Collected":false,"Results":[]},
+		 "DcomUsers":{"Collected":false,"Results":[]},
+		 "Sessions":{"Collected":true,"Results":[{"ComputerSID":"S-1-5-21-1-2-3-1003","UserSID":"S-1-5-21-1-2-3-1103"}]},
+		 "PrivilegedSessions":{"Collected":false,"Results":[]},
+		 "RegistrySessions":{"Collected":false,"Results":[]},
+		 "AllowedToDelegate":[],"AllowedToAct":[],"Aces":[],"IsDeleted":false}],
+		"meta":{"type":"computers","count":1,"version":5}}`,
+	"bh_ous.json": `{"data":[
+		{"ObjectIdentifier":"11111111-2222-3333-4444-555555555555",
+		 "Properties":{"name":"WORKSTATIONS@CORP.LOCAL","domain":"CORP.LOCAL",
+		   "distinguishedname":"OU=WORKSTATIONS,DC=CORP,DC=LOCAL"},
+		 "ChildObjects":[{"ObjectIdentifier":"S-1-5-21-1-2-3-1003","ObjectType":"Computer"}],
+		 "Links":[{"GUID":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","IsEnforced":true}],
+		 "Aces":[],"IsDeleted":false}],
+		"meta":{"type":"ous","count":1,"version":5}}`,
+	"bh_gpos.json": `{"data":[
+		{"ObjectIdentifier":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+		 "Properties":{"name":"DEFPOL@CORP.LOCAL","domain":"CORP.LOCAL",
+		   "distinguishedname":"CN={AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE},CN=POLICIES,CN=SYSTEM,DC=CORP,DC=LOCAL"},
+		 "Aces":[],"IsDeleted":false}],
+		"meta":{"type":"gpos","count":1,"version":5}}`,
+	"bh_domains.json": `{"data":[
+		{"ObjectIdentifier":"S-1-5-21-1-2-3",
+		 "Properties":{"name":"CORP.LOCAL","domain":"CORP.LOCAL","distinguishedname":"DC=CORP,DC=LOCAL","highvalue":true},
+		 "Trusts":[{"TargetDomainName":"CHILD.CORP.LOCAL","TargetDomainSid":"S-1-5-21-9-9-9",
+		   "TrustDirection":2,"TrustType":2,"IsTransitive":true,"SidFilteringEnabled":true}],
+		 "Aces":[],"IsDeleted":false}],
+		"meta":{"type":"domains","count":1,"version":5}}`,
+}
+
+func writeZip(t *testing.T, files map[string]string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "collection.zip")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func edgeSet(g *model.Graph) map[string]bool {
+	m := map[string]bool{}
+	for _, e := range g.Edges {
+		m[string(e.Kind)+"|"+e.Source+"|"+e.Target] = true
+	}
+	return m
+}
+
+func nodeByID(g *model.Graph, id string) (model.Node, bool) {
+	for _, n := range g.Nodes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return model.Node{}, false
+}
+
+func TestImportCEZip(t *testing.T) {
+	g, rpt, err := Load(writeZip(t, fixture))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if rpt.Domain != "CORP.LOCAL" {
+		t.Errorf("domain = %q, want CORP.LOCAL", rpt.Domain)
+	}
+	if rpt.Placeholders != 3 {
+		t.Errorf("placeholders = %d, want 3 (513, 515, trust target)", rpt.Placeholders)
+	}
+	if rpt.UnknownRights["BogusRight"] != 1 {
+		t.Errorf("unknown rights = %v, want BogusRight:1", rpt.UnknownRights)
+	}
+	if err := ingest.Validate(g); err != nil {
+		t.Fatalf("imported graph failed validation: %v", err)
+	}
+
+	const (
+		user   = "S-1-5-21-1-2-3-1103"
+		admins = "S-1-5-21-1-2-3-512"
+		pc     = "S-1-5-21-1-2-3-1003"
+		ou     = "11111111-2222-3333-4444-555555555555"
+		gpo    = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+		dom    = "S-1-5-21-1-2-3"
+		child  = "S-1-5-21-9-9-9"
+	)
+	es := edgeSet(g)
+
+	want := []string{
+		"MemberOf|" + user + "|" + admins,             // group Members
+		"MemberOf|" + pc + "|" + "S-1-5-21-1-2-3-515", // primary group
+		"GenericAll|" + user + "|" + admins,           // ACE
+		"AdminTo|" + admins + "|" + pc,                // LocalAdmins
+		"CanRDP|" + user + "|" + pc,                   // RemoteDesktopUsers
+		"HasSession|" + user + "|" + pc,               // Sessions
+		"Contains|" + ou + "|" + pc,                   // OU contains computer
+		"GPLink|" + gpo + "|" + ou,                    // GPO -> linked OU (BH CE direction)
+		"TrustedBy|" + child + "|" + dom,              // outbound trust: child trusted by corp
+	}
+	for _, k := range want {
+		if !es[k] {
+			t.Errorf("missing edge %s", k)
+		}
+	}
+	for k := range es {
+		if len(k) >= 10 && k[:10] == "BogusRight" {
+			t.Errorf("unmapped right name was fabricated as an edge: %s", k)
+		}
+	}
+
+	// Placeholder kind inference.
+	if n, ok := nodeByID(g, "S-1-5-21-1-2-3-513"); !ok || n.Kind != model.KindGroup {
+		t.Errorf("primary group placeholder = %+v ok=%v, want Group", n, ok)
+	}
+	if n, ok := nodeByID(g, child); !ok || n.Kind != model.KindDomain {
+		t.Errorf("trust target = %+v ok=%v, want Domain", n, ok)
+	}
+	if n, ok := nodeByID(g, admins); !ok || n.Kind != model.KindGroup || n.Props["highvalue"] != "true" {
+		t.Errorf("admins node = %+v ok=%v", n, ok)
+	}
+	if n, ok := nodeByID(g, user); !ok || n.SAMAccountName != "jdoe" || n.Domain != "CORP.LOCAL" || n.Props["enabled"] != "true" {
+		t.Errorf("user node = %+v ok=%v", n, ok)
+	}
+}
+
+func TestImportEnforcedGPLinkProp(t *testing.T) {
+	g, _, err := Load(writeZip(t, fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range g.Edges {
+		if e.Kind == model.EdgeGPLink {
+			if e.Props["enforced"] != "true" {
+				t.Fatalf("GPLink props = %v, want enforced=true", e.Props)
+			}
+			return
+		}
+	}
+	t.Fatal("no GPLink edge found")
+}
+
+// TestImportClassifiesByMetaTypeIgnoringPrefix proves that the exact filename
+// (which includes a timestamp/prefix in real BloodHound.py output) does not
+// matter as long as meta.type is present.
+func TestImportClassifiesByMetaTypeIgnoringPrefix(t *testing.T) {
+	dir := t.TempDir()
+	name := "bh_cascade.local_20260101120000_users.json"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(fixture["bh_users.json"]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g, rpt, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load dir: %v", err)
+	}
+	if _, ok := nodeByID(g, "S-1-5-21-1-2-3-1103"); !ok {
+		t.Fatalf("prefixed users file was not imported: %+v", rpt)
+	}
+}
+
+func TestImportRejectsGarbage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte("this is not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(path); err == nil {
+		t.Fatal("expected an error for a malformed JSON file")
+	}
+}
+
+func TestLoadMissingPath(t *testing.T) {
+	if _, _, err := Load(filepath.Join(t.TempDir(), "nope.zip")); err == nil {
+		t.Fatal("expected an error for a missing path")
+	}
+}

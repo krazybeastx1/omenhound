@@ -21,7 +21,7 @@ type Neo4jStore struct {
 func label(k model.Kind) (string, error) {
 	switch k {
 	case model.KindUser, model.KindGroup, model.KindComputer, model.KindDomain,
-		model.KindOU, model.KindGPO, model.KindContainer, model.KindTrust:
+		model.KindOU, model.KindGPO, model.KindContainer, model.KindTrust, model.KindBase:
 		return string(k), nil
 	default:
 		return "", fmt.Errorf("graph: unknown node kind %q", k)
@@ -38,6 +38,10 @@ var allowedRels = func() map[model.EdgeKind]bool {
 		model.EdgeExecuteDCOM, model.EdgeHasSession, model.EdgeMemberOf, model.EdgeDCSync,
 		model.EdgeGetChanges, model.EdgeGetChangesAll, model.EdgeReadLAPSPassword, model.EdgeReadGMSAPassword,
 		model.EdgeContains, model.EdgeGPLink, model.EdgeTrustedBy,
+		model.EdgeCanRDP, model.EdgeAllExtendedRights, model.EdgeAddKeyCredentialLink,
+		model.EdgeAddAllowedToAct, model.EdgeWriteSPN, model.EdgeWriteAccountRestrictions,
+		model.EdgeWriteGPLink, model.EdgeGetChangesInFilteredSet,
+		model.EdgeWriteAltSecurityIdentities, model.EdgeDumpSMSAPassword,
 	} {
 		m[k] = true
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/krazybeastx1/omenhound/internal/act"
 	"github.com/krazybeastx1/omenhound/internal/api"
 	"github.com/krazybeastx1/omenhound/internal/audit"
+	"github.com/krazybeastx1/omenhound/internal/bloodhound"
 	"github.com/krazybeastx1/omenhound/internal/collector"
 	"github.com/krazybeastx1/omenhound/internal/creds"
 	"github.com/krazybeastx1/omenhound/internal/graph"
@@ -44,6 +45,7 @@ func usage() {
 
 Usage:
   omenhound collect [flags]     collect a graph and write Graph JSON
+  omenhound import  [flags]     import BloodHound CE JSON/zip into Graph JSON
   omenhound serve   [flags]     run the ingestion API + web UI
   omenhound export  [flags]     convert a Graph JSON file (json|csv)
   omenhound version             print version
@@ -61,6 +63,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "collect":
 		return cmdCollect(args[1:])
+	case "import":
+		return cmdImport(args[1:])
 	case "serve":
 		return cmdServe(args[1:])
 	case "export":
@@ -288,6 +292,88 @@ func cmdServe(args []string) int {
 		}
 		return 0
 	}
+}
+
+// ---- import ----
+
+func cmdImport(args []string) int {
+	fs := flag.NewFlagSet("import", flag.ContinueOnError)
+	var (
+		in       = fs.String("in", "", "BloodHound CE .zip, a directory of JSON files, or a single JSON file")
+		out      = fs.String("out", "-", "output Graph JSON file, or - for stdout (ignored with --api)")
+		apiURL   = fs.String("api", "", "base URL of a running omenhound server to push the graph into, e.g. http://127.0.0.1:8080")
+		token    = fs.String("token", os.Getenv("OMENHOUND_API_TOKEN"), "bearer token for --api (env OMENHOUND_API_TOKEN)")
+		validate = fs.Bool("validate", true, "run ingest validation before writing or pushing")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *in == "" {
+		log.Print("import: --in is required (BloodHound CE .zip, a directory, or a JSON file)")
+		return 2
+	}
+	g, rpt, err := bloodhound.Load(*in)
+	if err != nil {
+		log.Printf("import: %v", err)
+		return 1
+	}
+	log.Printf("import: %d nodes, %d edges, %d placeholders from %d file(s) (domain %q)",
+		rpt.Nodes, rpt.Edges, rpt.Placeholders, len(rpt.Files), rpt.Domain)
+	if len(rpt.UnknownRights) > 0 {
+		log.Printf("import: ACE right names with no OmenHound edge (skipped): %v", rpt.UnknownRights)
+	}
+	if len(rpt.Skipped) > 0 {
+		log.Printf("import: skipped: %v", rpt.Skipped)
+	}
+	if *validate {
+		if err := ingest.Validate(g); err != nil {
+			log.Printf("import: validation failed: %v", err)
+			return 1
+		}
+	}
+	if *apiURL != "" {
+		if *token == "" {
+			log.Print("import: --api requires --token (or OMENHOUND_API_TOKEN)")
+			return 2
+		}
+		if err := pushGraph(*apiURL, *token, g); err != nil {
+			log.Printf("import: %v", err)
+			return 1
+		}
+		log.Printf("import: pushed %d nodes / %d edges to %s", len(g.Nodes), len(g.Edges), *apiURL)
+		return 0
+	}
+	if err := writeGraphFile(*out, g); err != nil {
+		log.Printf("import: %v", err)
+		return 1
+	}
+	return 0
+}
+
+func pushGraph(apiURL, token string, g *model.Graph) error {
+	body, err := json.Marshal(g)
+	if err != nil {
+		return fmt.Errorf("push: marshal: %w", err)
+	}
+	url := strings.TrimRight(apiURL, "/") + "/api/v1/ingest"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("push: request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("push: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("push: %s: %s", resp.Status, strings.TrimSpace(string(rb)))
+	}
+	log.Printf("import: server response: %s", strings.TrimSpace(string(rb)))
+	return nil
 }
 
 // ---- export ----

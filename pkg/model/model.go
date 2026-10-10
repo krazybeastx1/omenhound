@@ -20,6 +20,9 @@ const (
 	KindGPO       Kind = "GPO"
 	KindContainer Kind = "Container"
 	KindTrust     Kind = "Trust"
+	// KindBase is BloodHound CE's placeholder label for an object referenced by a
+	// relationship but not itself collected (e.g. a foreign SID with no object).
+	KindBase Kind = "Base"
 )
 
 // EdgeKind is an AD relationship. Values match BloodHound CE edge names and are
@@ -50,6 +53,18 @@ const (
 	EdgeContains            EdgeKind = "Contains"
 	EdgeGPLink              EdgeKind = "GPLink"
 	EdgeTrustedBy           EdgeKind = "TrustedBy"
+
+	// Additional BloodHound CE edges surfaced by the ACL/container collectors.
+	EdgeCanRDP                     EdgeKind = "CanRDP"
+	EdgeAllExtendedRights          EdgeKind = "AllExtendedRights"
+	EdgeAddKeyCredentialLink       EdgeKind = "AddKeyCredentialLink"
+	EdgeAddAllowedToAct            EdgeKind = "AddAllowedToAct"
+	EdgeWriteSPN                   EdgeKind = "WriteSPN"
+	EdgeWriteAccountRestrictions   EdgeKind = "WriteAccountRestrictions"
+	EdgeWriteGPLink                EdgeKind = "WriteGPLink"
+	EdgeGetChangesInFilteredSet    EdgeKind = "GetChangesInFilteredSet"
+	EdgeWriteAltSecurityIdentities EdgeKind = "WriteAltSecurityIdentities"
+	EdgeDumpSMSAPassword           EdgeKind = "DumpSMSAPassword"
 )
 
 // Node is a single AD entity. Props carries collector-specific attributes

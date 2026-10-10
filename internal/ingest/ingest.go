@@ -32,6 +32,7 @@ type Result struct {
 var knownKinds = map[model.Kind]bool{
 	model.KindUser: true, model.KindGroup: true, model.KindComputer: true, model.KindDomain: true,
 	model.KindOU: true, model.KindGPO: true, model.KindContainer: true, model.KindTrust: true,
+	model.KindBase: true,
 }
 
 var knownEdges = map[model.EdgeKind]bool{
@@ -41,6 +42,10 @@ var knownEdges = map[model.EdgeKind]bool{
 	model.EdgeExecuteDCOM: true, model.EdgeHasSession: true, model.EdgeMemberOf: true, model.EdgeDCSync: true,
 	model.EdgeGetChanges: true, model.EdgeGetChangesAll: true, model.EdgeReadLAPSPassword: true, model.EdgeReadGMSAPassword: true,
 	model.EdgeContains: true, model.EdgeGPLink: true, model.EdgeTrustedBy: true,
+	model.EdgeCanRDP: true, model.EdgeAllExtendedRights: true, model.EdgeAddKeyCredentialLink: true,
+	model.EdgeAddAllowedToAct: true, model.EdgeWriteSPN: true, model.EdgeWriteAccountRestrictions: true,
+	model.EdgeWriteGPLink: true, model.EdgeGetChangesInFilteredSet: true,
+	model.EdgeWriteAltSecurityIdentities: true, model.EdgeDumpSMSAPassword: true,
 }
 
 // Validate checks size, referential integrity, and vocabulary.

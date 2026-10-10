@@ -42,6 +42,7 @@ func buildVars(e model.Edge, src, tgt model.Node) map[string]string {
 		phSourceSAM:  orUnknown(firstNonEmpty(src.SAMAccountName, src.Name)),
 		phSourceDN:   orUnknown(src.DN),
 		phSourceSID:  orUnknown(src.ID),
+		phSourceName: orUnknown(firstNonEmpty(src.Name, src.SAMAccountName)),
 		phTargetSAM:  orUnknown(firstNonEmpty(tgt.SAMAccountName, tgt.Name)),
 		phTargetDN:   orUnknown(tgt.DN),
 		phTargetSID:  orUnknown(tgt.ID),
