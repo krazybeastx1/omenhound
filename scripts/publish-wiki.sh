@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish docs/wiki/*.md (and img/) to the project's GitHub wiki.
+# Publish wiki/*.md (and img/) to the project's GitHub wiki.
 #
 # GitHub creates the wiki git repository only *after the first page exists*.
 # If cloning fails with "Repository not found", open
@@ -9,7 +9,7 @@ set -euo pipefail
 
 REPO="${OMENHOUND_REPO:-krazybeastx1/omenhound}"
 SLUG="${REPO#*/}"
-SRC="$(cd "$(dirname "$0")/.." && pwd)/docs/wiki"
+SRC="$(cd "$(dirname "$0")/.." && pwd)/wiki"
 WIKI_URL="git@github.com:${REPO}.wiki.git"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

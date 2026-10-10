@@ -38,7 +38,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/krazybeastx1/omenhound/wiki"><b>📖 Full guide in the wiki →</b></a>
+  <a href="wiki/Home.md"><b>📖 Full guide →</b></a>
+  &nbsp;·&nbsp;
+  <a href="wiki/">wiki/</a>
 </p>
 
 > [!WARNING]
@@ -80,7 +82,7 @@ bloodyAD --host DC.omenhound.lab -d omenhound.lab -u jdoe -p '<password>' set pa
 
 | Attack-path graph | Dynamic abuse panel | Write-API auth gate |
 |---|---|---|
-| ![graph](docs/wiki/img/webui-graph.png) | ![abuse](docs/wiki/img/webui-abuse.png) | ![gate](docs/wiki/img/webui-authgate.png) |
+| ![graph](wiki/img/webui-graph.png) | ![abuse](wiki/img/webui-abuse.png) | ![gate](wiki/img/webui-authgate.png) |
 
 ---
 
@@ -225,16 +227,19 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Documentation
 
-**Full guides live in the [wiki](https://github.com/krazybeastx1/omenhound/wiki):**
+**Full guides live in [`wiki/`](wiki/Home.md)** (GitHub-wiki format; publishable as-is):
 
-- [Getting Started](https://github.com/krazybeastx1/omenhound/wiki/Getting-Started) — install, sample mode, real collection, import.
-- [How It Works](https://github.com/krazybeastx1/omenhound/wiki/How-It-Works) — packages, data model, edge directions.
-- [Web UI Guide](https://github.com/krazybeastx1/omenhound/wiki/Web-UI-Guide) — graph, abuse panel, auth gate (with screenshots).
-- [Operations & Hardening](https://github.com/krazybeastx1/omenhound/wiki/Operations-and-Hardening) — secure defaults, gating, audit, OPSEC.
-- [API Reference](https://github.com/krazybeastx1/omenhound/wiki/API-Reference) — every HTTP endpoint and payload.
-- [Neo4j Schema & Attack Paths](https://github.com/krazybeastx1/omenhound/wiki/Neo4j-Schema-and-Attack-Paths) — labels, relationship types, Cypher.
-- [Coming from BloodHound.py](https://github.com/krazybeastx1/omenhound/wiki/Coming-from-BloodHound-py) — flag/method/format compatibility.
-- [Roadmap](https://github.com/krazybeastx1/omenhound/wiki/Roadmap).
+- [Getting Started](wiki/Getting-Started.md) — install, sample mode, real collection, import.
+- [How It Works](wiki/How-It-Works.md) — packages, data model, edge directions.
+- [Web UI Guide](wiki/Web-UI-Guide.md) — graph, abuse panel, auth gate (with screenshots).
+- [Operations & Hardening](wiki/Operations-and-Hardening.md) — secure defaults, gating, audit, OPSEC.
+- [API Reference](wiki/API-Reference.md) — every HTTP endpoint and payload.
+- [Neo4j Schema & Attack Paths](wiki/Neo4j-Schema-and-Attack-Paths.md) — labels, relationship types, Cypher.
+- [Coming from BloodHound.py](wiki/Coming-from-BloodHound-py.md) — flag/method/format compatibility.
+- [Roadmap](wiki/Roadmap.md).
+
+To serve the same pages as a real GitHub wiki, see [`wiki/README.md`](wiki/README.md) and
+`scripts/publish-wiki.sh`.
 
 In-repo references:
 

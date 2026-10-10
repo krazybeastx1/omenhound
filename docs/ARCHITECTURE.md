@@ -541,7 +541,8 @@ omenhound/
 │   └── version/              # version.Version, set via -ldflags
 ├── pkg/model/                # model.go — the shared data contract (public)
 ├── web/static/               # embedded UI (index.html, app.js, styles.css)
-├── scripts/  testdata/ docs/ # helpers; fixtures; design docs + wiki source
+├── wiki/                     # wiki-source docs (Home.md, …) + img/ screenshots
+├── scripts/  testdata/ docs/ # helpers; fixtures; design docs
 ├── Makefile · go.mod         # build targets; module github.com/.../omenhound
 ```
 

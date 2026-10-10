@@ -86,7 +86,7 @@ auth gate:
 
 ```bash
 ./bin/omenhound serve --collector sample --addr 127.0.0.1:18091 --api-token operator-secret &
-python3 scripts/shots.py http://127.0.0.1:18091 docs/wiki/img
+python3 scripts/shots.py http://127.0.0.1:18091 wiki/img
 ```
 
 It captures the graph, performs a **real edge click** for the abuse panel, and drives the

@@ -28,3 +28,16 @@ clean:
 # Demo: collect the bundled sample graph, serve the API/UI, and open http://127.0.0.1:8080
 run-sample: build
 	./bin/$(BINARY) serve --collector sample --addr 127.0.0.1:8080
+
+.PHONY: shots wiki
+
+# Capture the wiki screenshots (Selenium + system Chromium).
+shots: build
+	./bin/$(BINARY) serve --collector sample --addr 127.0.0.1:18091 --api-token operator-secret & \
+	srv=$$!; sleep 2; \
+	python3 scripts/shots.py http://127.0.0.1:18091 wiki/img; \
+	rc=$$?; kill $$srv 2>/dev/null; exit $$rc
+
+# Publish wiki/*.md to the project GitHub wiki (see wiki/README.md).
+wiki:
+	scripts/publish-wiki.sh
