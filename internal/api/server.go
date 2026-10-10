@@ -7,10 +7,12 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,17 +52,23 @@ type Config struct {
 	// ActInsecureSkipVerify disables TLS verification for the AD write (lab only).
 	ActInsecureSkipVerify bool
 
+	// WriteRatePerMinute / WriteBurst tune the write-API rate limiter.
+	// Zero values select safe defaults (120/min, burst 30).
+	WriteRatePerMinute int
+	WriteBurst         int
+
 	// Logger for request logging; defaults to stderr.
 	Logger *log.Logger
 }
 
 // Server is the HTTP handler for OmenHound.
 type Server struct {
-	cfg   Config
-	store graph.Store
-	creds *creds.Store
-	audit *audit.Logger
-	log   *log.Logger
+	cfg     Config
+	store   graph.Store
+	creds   *creds.Store
+	audit   *audit.Logger
+	log     *log.Logger
+	limiter *rateLimiter
 }
 
 // New builds a Server, filling defaults.
@@ -84,7 +92,8 @@ func New(cfg Config) *Server {
 	if lg == nil {
 		lg = log.New(io.Discard, "", 0)
 	}
-	return &Server{cfg: cfg, store: store, creds: c, audit: a, log: lg}
+	return &Server{cfg: cfg, store: store, creds: c, audit: a, log: lg,
+		limiter: newRateLimiter(cfg.WriteRatePerMinute, cfg.WriteBurst)}
 }
 
 // Handler returns the routed, panic-safe HTTP handler.
@@ -111,7 +120,7 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", http.FileServer(http.FS(sub)))
 	}
 
-	return s.recover(mux)
+	return securityHeaders(s.limiter.middleware(s.recover(mux)))
 }
 
 func (s *Server) recover(next http.Handler) http.Handler {
@@ -163,38 +172,75 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes, "edges": edges})
 }
 
+// defaultPageLimit / maxPageLimit bound list endpoints so a large graph cannot
+// exhaust a browser or a client in one response.
+const (
+	defaultPageLimit = 1000
+	maxPageLimit     = 10000
+)
+
+// pageParams reads limit/offset query parameters with safe defaults.
+func pageParams(r *http.Request) (limit, offset int) {
+	limit, offset = defaultPageLimit, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = min(n, maxPageLimit)
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	return limit, offset
+}
+
+func page[T any](items []T, limit, offset int) []T {
+	if offset >= len(items) {
+		return []T{}
+	}
+	end := min(offset+limit, len(items))
+	return items[offset:end]
+}
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	limit, offset := pageParams(r)
 	nodes, err := s.store.AllNodes(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, nodes)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total": len(nodes), "limit": limit, "offset": offset,
+		"nodes": page(nodes, limit, offset),
+	})
 }
 
 func (s *Server) handleEdges(w http.ResponseWriter, r *http.Request) {
+	limit, offset := pageParams(r)
 	edges, err := s.store.AllEdges(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, edges)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total": len(edges), "limit": limit, "offset": offset,
+		"edges": page(edges, limit, offset),
+	})
 }
 
 func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	nodes, err := s.store.AllNodes(r.Context())
+	n, ok, err := s.store.GetNode(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	for _, n := range nodes {
-		if n.ID == id {
-			writeJSON(w, http.StatusOK, n)
-			return
-		}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "node not found")
+		return
 	}
-	writeErr(w, http.StatusNotFound, "node not found")
+	writeJSON(w, http.StatusOK, n)
 }
 
 func (s *Server) handleNeighbors(w http.ResponseWriter, r *http.Request) {
@@ -223,21 +269,20 @@ func (s *Server) handleAbuse(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "src, kind and dst query parameters are required")
 		return
 	}
-	nodes, err := s.store.AllNodes(r.Context())
+	src, ok, err := s.store.GetNode(r.Context(), srcID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	idx := make(map[string]model.Node, len(nodes))
-	for _, n := range nodes {
-		idx[n.ID] = n
-	}
-	src, ok := idx[srcID]
 	if !ok {
 		writeErr(w, http.StatusNotFound, "source node not found")
 		return
 	}
-	dst, ok := idx[dstID]
+	dst, ok, err := s.store.GetNode(r.Context(), dstID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, "target node not found")
 		return
@@ -274,7 +319,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
-	g, err := ingest.Decode(r.Body)
+	g, err := ingest.DecodeStrict(r.Body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -286,7 +331,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "ok", RemoteAddr: r.RemoteAddr,
-		Fields: map[string]string{"nodes": itoa(res.Nodes), "edges": itoa(res.Edges)}})
+		Fields: map[string]string{"nodes": strconv.Itoa(res.Nodes), "edges": strconv.Itoa(res.Edges)}})
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -305,8 +350,8 @@ func (s *Server) handleCredentialPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req credPutReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+	if err := decodeJSON(w, r, &req, 1<<20); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
 	secret := []byte(req.Password)
@@ -357,8 +402,8 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req changePwReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+	if err := decodeJSON(w, r, &req, 1<<20); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
 	cred, err := s.creds.Take(id) // one-shot
@@ -398,6 +443,8 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // ---- helpers ----
 
+var errTrailingJSON = errors.New("unexpected trailing JSON after request body")
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -409,24 +456,15 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// decodeJSON decodes a bounded JSON body, rejecting unknown fields.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any, max int64) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, max))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
 	}
-	neg := n < 0
-	if neg {
-		n = -n
+	if dec.More() {
+		return errTrailingJSON
 	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return nil
 }

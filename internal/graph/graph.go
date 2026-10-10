@@ -30,6 +30,8 @@ type Store interface {
 	DeleteNode(ctx context.Context, id string) error
 	// DeleteEdge removes a single relationship.
 	DeleteEdge(ctx context.Context, source, target string, kind model.EdgeKind) error
+	// GetNode returns one node by ID. The bool is false when absent.
+	GetNode(ctx context.Context, id string) (model.Node, bool, error)
 	// Neighbors returns outgoing edges from id.
 	Neighbors(ctx context.Context, id string) ([]model.Edge, error)
 	// Incoming returns incoming edges to id.

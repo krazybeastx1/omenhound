@@ -2,6 +2,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -77,19 +78,32 @@ func Validate(g *model.Graph) error {
 	return nil
 }
 
-// Decode reads a JSON model.Graph from r, bounded by MaxBytes.
-func Decode(r io.Reader) (*model.Graph, error) {
-	lr := io.LimitReader(r, MaxBytes+1)
-	data, err := io.ReadAll(lr)
+// Decode reads a JSON model.Graph from r, bounded by MaxBytes. Unknown fields
+// are tolerated so third-party/BloodHound-derived payloads import cleanly.
+func Decode(r io.Reader) (*model.Graph, error) { return decode(r, false) }
+
+// DecodeStrict is like Decode but rejects unknown JSON fields. Use it for
+// untrusted HTTP bodies, where extra fields usually signal a malformed client.
+func DecodeStrict(r io.Reader) (*model.Graph, error) { return decode(r, true) }
+
+func decode(r io.Reader, strict bool) (*model.Graph, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("ingest: read: %w", err)
 	}
 	if len(data) > MaxBytes {
 		return nil, fmt.Errorf("ingest: payload exceeds %d bytes", MaxBytes)
 	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	var g model.Graph
-	if err := json.Unmarshal(data, &g); err != nil {
+	if err := dec.Decode(&g); err != nil {
 		return nil, fmt.Errorf("ingest: decode json: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("ingest: trailing data after JSON object")
 	}
 	return &g, nil
 }

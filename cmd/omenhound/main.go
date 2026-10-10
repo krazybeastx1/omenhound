@@ -30,6 +30,7 @@ import (
 	"github.com/krazybeastx1/omenhound/internal/api"
 	"github.com/krazybeastx1/omenhound/internal/audit"
 	"github.com/krazybeastx1/omenhound/internal/collector"
+	"github.com/krazybeastx1/omenhound/internal/creds"
 	"github.com/krazybeastx1/omenhound/internal/graph"
 	"github.com/krazybeastx1/omenhound/internal/ingest"
 	"github.com/krazybeastx1/omenhound/internal/version"
@@ -91,6 +92,7 @@ func cmdCollect(args []string) int {
 		username      = fs.String("username", "", "bind username")
 		password      = fs.String("password", "", "bind password (prefer --password-stdin or $OMENHOUND_PASSWORD)")
 		passwordStdin = fs.Bool("password-stdin", false, "read bind password from stdin")
+		plaintext     = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only; refused by default)")
 		timeout       = fs.Duration("timeout", 60*time.Second, "collection timeout")
 		out           = fs.String("out", "-", "output file, or - for stdout")
 	)
@@ -116,6 +118,7 @@ func cmdCollect(args []string) int {
 	opts := collector.Options{
 		Domain: *domain, Server: *server, BaseDN: *baseDN, UseLDAPS: *ldaps,
 		InsecureSkipVerify: *insecure, Username: *username, Password: pw, Timeout: *timeout,
+		AllowPlaintextLDAP: *plaintext,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.EffectiveTimeout())
@@ -150,6 +153,7 @@ func cmdServe(args []string) int {
 		insecure      = fs.Bool("insecure", false, "skip TLS verification (lab only)")
 		username      = fs.String("username", "", "bind username")
 		password      = fs.String("password", "", "bind password (prefer $OMENHOUND_PASSWORD)")
+		plaintext     = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only)")
 		timeout       = fs.Duration("timeout", 60*time.Second, "collection timeout")
 		neo4jURI      = fs.String("neo4j-uri", "", "Neo4j URI (bolt://host:7687); empty = in-memory")
 		neo4jUser     = fs.String("neo4j-user", "neo4j", "Neo4j user")
@@ -157,6 +161,8 @@ func cmdServe(args []string) int {
 		apiToken      = fs.String("api-token", os.Getenv("OMENHOUND_API_TOKEN"), "bearer token enabling write endpoints (env OMENHOUND_API_TOKEN)")
 		enableOps     = fs.Bool("enable-credential-ops", false, "enable the gated AD password-change endpoint (authorized lab only)")
 		auditLog      = fs.String("audit-log", "", "audit log file (default stderr)")
+		writeRate     = fs.Int("write-rate-limit", 120, "max write requests per minute per client IP")
+		writeBurst    = fs.Int("write-burst", 30, "write request burst per client IP")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -175,8 +181,13 @@ func cmdServe(args []string) int {
 	}
 	auditLogger := audit.New(auditW)
 
+	// Memory-only credential vault; a janitor zeroes secrets as soon as they expire.
+	credStore := creds.NewStore(15*time.Minute, 64)
+	defer credStore.Close()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	go credStore.Janitor(ctx, time.Minute)
 
 	// store
 	var store graph.Store
@@ -204,7 +215,8 @@ func cmdServe(args []string) int {
 		}
 		pw, _ := readPassword(*password, false)
 		opts := collector.Options{Domain: *domain, Server: *server, BaseDN: *baseDN, UseLDAPS: *ldaps,
-			InsecureSkipVerify: *insecure, Username: *username, Password: pw, Timeout: *timeout}
+			InsecureSkipVerify: *insecure, Username: *username, Password: pw, Timeout: *timeout,
+			AllowPlaintextLDAP: *plaintext}
 		cctx, ccancel := context.WithTimeout(ctx, opts.EffectiveTimeout())
 		g, err := c.Collect(cctx, opts)
 		ccancel()
@@ -223,12 +235,15 @@ func cmdServe(args []string) int {
 
 	srvCfg := api.Config{
 		StoreIface:            store,
+		Creds:                 credStore,
 		Audit:                 auditLogger,
 		Version:               version.Version,
 		APIToken:              *apiToken,
 		EnableCredentialOps:   *enableOps,
 		ActServer:             *server,
 		ActInsecureSkipVerify: *insecure,
+		WriteRatePerMinute:    *writeRate,
+		WriteBurst:            *writeBurst,
 		ChangePassword: func(ctx context.Context, o act.Options, targetDN string, newPassword []byte) error {
 			return act.ChangePassword(ctx, o, targetDN, newPassword)
 		},

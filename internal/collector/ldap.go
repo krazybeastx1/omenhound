@@ -3,8 +3,8 @@ package collector
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -24,16 +24,19 @@ func (LDAPCollector) Name() string { return "ldap" }
 // userAccountControl flag: ACCOUNTDISABLE (0x0002).
 const uacAccountDisable = 0x0002
 
+// Search bounds: a page size for paged searches, a hard cap on entries per
+// search (guards against pathological/looping directories), and a per-search
+// server-side time limit in seconds.
+const (
+	ldapPageSize      = 500
+	ldapMaxEntries    = 500_000
+	ldapSearchTimeLim = 60
+)
+
 // Collect implements Collector.
 func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, error) {
-	if o.Server == "" {
-		return nil, errors.New("ldap: server is required (--server)")
-	}
-	if o.Domain == "" {
-		return nil, errors.New("ldap: domain is required (--domain)")
-	}
-	if o.Username == "" {
-		return nil, errors.New("ldap: username is required (--username)")
+	if err := validateOptions(o); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, o.EffectiveTimeout())
 	defer cancel()
@@ -154,7 +157,7 @@ func dialLDAP(o Options) (*ldap.Conn, error) {
 		addr += ":" + port
 	}
 	url := scheme + "://" + addr
-	var opts []ldap.DialOpt
+	opts := []ldap.DialOpt{ldap.DialWithDialer(&net.Dialer{Timeout: o.EffectiveTimeout()})}
 	if o.UseLDAPS {
 		host := addr
 		if i := strings.LastIndex(host, ":"); i >= 0 {
@@ -182,10 +185,13 @@ func searchBase(conn *ldap.Conn, baseDN string, attrs []string) (*ldap.Entry, er
 }
 
 func eachEntry(conn *ldap.Conn, baseDN, filter string, attrs []string, fn func(*ldap.Entry)) error {
-	req := ldap.NewSearchRequest(baseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false, filter, attrs, nil)
-	res, err := conn.SearchWithPaging(req, 500)
+	req := ldap.NewSearchRequest(baseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, ldapSearchTimeLim, false, filter, attrs, nil)
+	res, err := conn.SearchWithPaging(req, ldapPageSize)
 	if err != nil {
 		return fmt.Errorf("ldap: search %q: %w", filter, err)
+	}
+	if len(res.Entries) > ldapMaxEntries {
+		return fmt.Errorf("ldap: search %q returned %d entries (limit %d)", filter, len(res.Entries), ldapMaxEntries)
 	}
 	for _, e := range res.Entries {
 		fn(e)

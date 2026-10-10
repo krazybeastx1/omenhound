@@ -83,30 +83,60 @@ type Meta struct {
 
 // Graph is a full collection result. It is the on-the-wire format between the
 // collector and the ingestion API, and the export format for `omenhound export`.
+//
+// AddNode/AddEdge keep an internal index so building large graphs stays O(1) per
+// insert instead of O(n) scans. The index is unexported and lazily rebuilt, so a
+// Graph decoded from JSON behaves identically.
 type Graph struct {
 	Nodes []Node `json:"nodes"`
 	Edges []Edge `json:"edges"`
 	Meta  Meta   `json:"meta"`
+
+	nodeIdx map[string]int
+	edgeIdx map[string]struct{}
 }
 
-// AddNode appends a node if its ID is not already present.
-func (g *Graph) AddNode(n Node) {
-	for i := range g.Nodes {
-		if g.Nodes[i].ID == n.ID {
-			g.Nodes[i] = n
-			return
-		}
+func edgeKey(e Edge) string { return e.Source + "\x00" + string(e.Kind) + "\x00" + e.Target }
+
+func (g *Graph) indexNodes() {
+	if g.nodeIdx != nil {
+		return
 	}
+	g.nodeIdx = make(map[string]int, len(g.Nodes))
+	for i := range g.Nodes {
+		g.nodeIdx[g.Nodes[i].ID] = i
+	}
+}
+
+func (g *Graph) indexEdges() {
+	if g.edgeIdx != nil {
+		return
+	}
+	g.edgeIdx = make(map[string]struct{}, len(g.Edges))
+	for _, e := range g.Edges {
+		g.edgeIdx[edgeKey(e)] = struct{}{}
+	}
+}
+
+// AddNode upserts a node by ID in O(1).
+func (g *Graph) AddNode(n Node) {
+	g.indexNodes()
+	if i, ok := g.nodeIdx[n.ID]; ok {
+		g.Nodes[i] = n
+		return
+	}
+	g.nodeIdx[n.ID] = len(g.Nodes)
 	g.Nodes = append(g.Nodes, n)
 }
 
-// AddEdge appends an edge, deduplicating on (Source, Target, Kind).
+// AddEdge appends an edge, deduplicating on (Source, Target, Kind) in O(1).
 func (g *Graph) AddEdge(e Edge) {
-	for i := range g.Edges {
-		if g.Edges[i].Source == e.Source && g.Edges[i].Target == e.Target && g.Edges[i].Kind == e.Kind {
-			return
-		}
+	g.indexEdges()
+	k := edgeKey(e)
+	if _, ok := g.edgeIdx[k]; ok {
+		return
 	}
+	g.edgeIdx[k] = struct{}{}
 	g.Edges = append(g.Edges, e)
 }
 

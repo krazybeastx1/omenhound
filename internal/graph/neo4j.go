@@ -94,47 +94,102 @@ func (s *Neo4jStore) write(ctx context.Context, fn func(tx neo4j.ManagedTransact
 	return err
 }
 
-// UpsertNodes implements Store.
+// batchSize bounds how many rows are sent in a single UNWIND query.
+const batchSize = 5000
+
+// UpsertNodes implements Store. Nodes are grouped by label and written with a
+// single UNWIND per batch, which is dramatically faster than one round trip per
+// node (network + transaction overhead dominate otherwise).
 func (s *Neo4jStore) UpsertNodes(ctx context.Context, nodes []model.Node) error {
 	if len(nodes) == 0 {
 		return nil
 	}
+	byLabel := make(map[string][]model.Node)
+	for _, n := range nodes {
+		lbl, err := label(n.Kind)
+		if err != nil {
+			return err
+		}
+		byLabel[lbl] = append(byLabel[lbl], n)
+	}
 	return s.write(ctx, func(tx neo4j.ManagedTransaction) error {
-		for _, n := range nodes {
-			lbl, err := label(n.Kind)
-			if err != nil {
-				return err
-			}
-			q := fmt.Sprintf("MERGE (n:%s {id:$id}) SET n.name=$name, n.domain=$domain, n.sam=$sam, n.dn=$dn, n.props=$props", lbl)
-			if _, err := tx.Run(ctx, q, map[string]any{
-				"id": n.ID, "name": n.Name, "domain": n.Domain,
-				"sam": n.SAMAccountName, "dn": n.DN, "props": toAnyMap(n.Props),
-			}); err != nil {
-				return err
+		for lbl, group := range byLabel {
+			q := fmt.Sprintf(
+				"UNWIND $rows AS row MERGE (n:%s {id: row.id}) "+
+					"SET n.name = row.name, n.domain = row.domain, n.sam = row.sam, n.dn = row.dn, n.props = row.props",
+				lbl)
+			for start := 0; start < len(group); start += batchSize {
+				end := min(start+batchSize, len(group))
+				rows := make([]map[string]any, 0, end-start)
+				for _, n := range group[start:end] {
+					rows = append(rows, map[string]any{
+						"id": n.ID, "name": n.Name, "domain": n.Domain,
+						"sam": n.SAMAccountName, "dn": n.DN, "props": toAnyMap(n.Props),
+					})
+				}
+				if _, err := tx.Run(ctx, q, map[string]any{"rows": rows}); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
 }
 
-// UpsertEdges implements Store.
+// UpsertEdges implements Store, grouped by relationship type with UNWIND.
 func (s *Neo4jStore) UpsertEdges(ctx context.Context, edges []model.Edge) error {
 	if len(edges) == 0 {
 		return nil
 	}
+	byType := make(map[string][]model.Edge)
+	for _, e := range edges {
+		rt, err := relType(e.Kind)
+		if err != nil {
+			return err
+		}
+		byType[rt] = append(byType[rt], e)
+	}
 	return s.write(ctx, func(tx neo4j.ManagedTransaction) error {
-		for _, e := range edges {
-			rt, err := relType(e.Kind)
-			if err != nil {
-				return err
-			}
-			q := fmt.Sprintf("MATCH (a {id:$src}), (b {id:$tgt}) MERGE (a)-[r:%s]->(b)", rt)
-			if _, err := tx.Run(ctx, q, map[string]any{"src": e.Source, "tgt": e.Target}); err != nil {
-				return err
+		for rt, group := range byType {
+			q := fmt.Sprintf(
+				"UNWIND $rows AS row MATCH (a {id: row.src}), (b {id: row.tgt}) MERGE (a)-[:%s]->(b)", rt)
+			for start := 0; start < len(group); start += batchSize {
+				end := min(start+batchSize, len(group))
+				rows := make([]map[string]any, 0, end-start)
+				for _, e := range group[start:end] {
+					rows = append(rows, map[string]any{"src": e.Source, "tgt": e.Target})
+				}
+				if _, err := tx.Run(ctx, q, map[string]any{"rows": rows}); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// GetNode implements Store.
+func (s *Neo4jStore) GetNode(ctx context.Context, id string) (model.Node, bool, error) {
+	session := s.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: s.database, AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+	v, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		r, err := tx.Run(ctx, "MATCH (n {id: $id}) RETURN "+nodeProjection+" LIMIT 1", map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+		if !r.Next(ctx) {
+			return nil, r.Err()
+		}
+		return nodeFromRecord(r.Record()), r.Err()
+	})
+	if err != nil {
+		return model.Node{}, false, err
+	}
+	if v == nil {
+		return model.Node{}, false, nil
+	}
+	n, _ := v.(model.Node)
+	return n, true, nil
 }
 
 // DeleteNode implements Store.
@@ -200,28 +255,33 @@ func (s *Neo4jStore) edges(ctx context.Context, query, id string) ([]model.Edge,
 	return edges, nil
 }
 
+// nodeProjection is the shared RETURN clause for node reads.
+const nodeProjection = "n.id AS id, labels(n) AS labels, n.name AS name, n.domain AS domain, n.sam AS sam, n.dn AS dn, n.props AS props"
+
+func nodeFromRecord(rec *neo4j.Record) model.Node {
+	return model.Node{
+		ID:             asString(rec, "id"),
+		Kind:           model.Kind(firstLabel(rec, "labels")),
+		Name:           asString(rec, "name"),
+		Domain:         asString(rec, "domain"),
+		SAMAccountName: asString(rec, "sam"),
+		DN:             asString(rec, "dn"),
+		Props:          asStringMap(rec, "props"),
+	}
+}
+
 // AllNodes implements Store.
 func (s *Neo4jStore) AllNodes(ctx context.Context) ([]model.Node, error) {
 	session := s.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: s.database, AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 	v, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		r, err := tx.Run(ctx, "MATCH (n) RETURN n.id AS id, labels(n) AS labels, n.name AS name, n.domain AS domain, n.sam AS sam, n.dn AS dn, n.props AS props", nil)
+		r, err := tx.Run(ctx, "MATCH (n) RETURN "+nodeProjection, nil)
 		if err != nil {
 			return nil, err
 		}
 		var out []model.Node
 		for r.Next(ctx) {
-			rec := r.Record()
-			n := model.Node{
-				ID:             asString(rec, "id"),
-				Kind:           model.Kind(firstLabel(rec, "labels")),
-				Name:           asString(rec, "name"),
-				Domain:         asString(rec, "domain"),
-				SAMAccountName: asString(rec, "sam"),
-				DN:             asString(rec, "dn"),
-				Props:          asStringMap(rec, "props"),
-			}
-			out = append(out, n)
+			out = append(out, nodeFromRecord(r.Record()))
 		}
 		return out, r.Err()
 	})

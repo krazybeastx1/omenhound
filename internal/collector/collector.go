@@ -37,6 +37,28 @@ type Options struct {
 	// IncludeSessions requests session collection (requires SMB; ldap-only
 	// collectors ignore it with a warning).
 	IncludeSessions bool
+	// AllowPlaintextLDAP permits binding over unencrypted LDAP. This is refused
+	// by default because it exposes credentials on the wire.
+	AllowPlaintextLDAP bool
+}
+
+// validateOptions enforces the collector's safety invariants before any network
+// traffic is generated.
+func validateOptions(o Options) error {
+	if o.Server == "" {
+		return errors.New("ldap: server is required (--server)")
+	}
+	if o.Domain == "" {
+		return errors.New("ldap: domain is required (--domain)")
+	}
+	if o.Username == "" {
+		return errors.New("ldap: username is required (--username)")
+	}
+	if !o.UseLDAPS && !o.AllowPlaintextLDAP {
+		return errors.New("ldap: refusing plaintext LDAP; credentials would travel in the clear. " +
+			"Use --ldaps, or --allow-plaintext-ldap only on an isolated lab")
+	}
+	return nil
 }
 
 // EffectiveTimeout returns Timeout or a sane default.

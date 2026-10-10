@@ -6,15 +6,21 @@
 package creds
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"time"
 )
 
 // ErrNotFound is returned when a session id is unknown or expired.
 var ErrNotFound = errors.New("creds: session not found or expired")
+
+// maxSecretLen bounds a stored secret so an oversized body cannot pin memory.
+const maxSecretLen = 4096
 
 // Credential is a short-lived in-memory secret.
 type Credential struct {
@@ -36,11 +42,13 @@ func (c *Credential) Expires() time.Time { return c.expires }
 // Destroy zeroes the secret in place.
 func (c *Credential) Destroy() { Zero(c.secret) }
 
-// Zero overwrites b with zero bytes.
+// Zero overwrites b with zero bytes. runtime.KeepAlive prevents the compiler
+// from proving the buffer dead and eliding the writes.
 func Zero(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+	runtime.KeepAlive(b)
 }
 
 type entry struct {
@@ -71,6 +79,9 @@ func NewStore(ttl time.Duration, max int) *Store {
 func (s *Store) Put(domain, username string, secret []byte) (string, time.Time, error) {
 	if len(secret) == 0 {
 		return "", time.Time{}, errors.New("creds: empty secret")
+	}
+	if len(secret) > maxSecretLen {
+		return "", time.Time{}, fmt.Errorf("creds: secret too long (%d > %d bytes)", len(secret), maxSecretLen)
 	}
 	id, err := newID()
 	if err != nil {
@@ -141,6 +152,26 @@ func (s *Store) Close() {
 	for id, e := range s.m {
 		e.cred.Destroy()
 		delete(s.m, id)
+	}
+}
+
+// Janitor zeroes and removes expired credentials on a ticker until ctx is done.
+// Call it in a goroutine so secrets do not outlive their TTL when idle.
+func (s *Store) Janitor(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.mu.Lock()
+			s.sweepLocked(s.nowFunc())
+			s.mu.Unlock()
+		}
 	}
 }
 
