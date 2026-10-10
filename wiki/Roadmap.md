@@ -27,6 +27,13 @@ every gap is reported rather than faked. This page is the current boundary.
   between `Domain` nodes in BloodHound's direction, with trust type, transitivity and
   SID-filtering carried on the edge. `-c dc` / `-c dconly` now expands to fully
   implemented methods. *Status:* parsing/mapping unit-tested; live path **code-only**.
+- **Auth** — LDAP **simple bind** by default, **NTLM bind** (`--auth-method ntlm`) and
+  **pass-the-hash** (`--hashes NT|LM:NT`) over LDAPS, using go-ldap's NTLMSSP bind
+  (no extra dependency). `--hashes` implies NTLM; only the NT half is used. Cleartext
+  NTLM is refused unless `--allow-plaintext-ldap`. Kerberos (`-k`) is accepted and
+  **refuses to run** with a clear message. *Status:* hash parsing, principal splitting,
+  method resolution and every refusal are unit-tested; the NTLMSSP handshake itself is
+  **code-only** (no AD lab available).
 - **BloodHound CE interop** — import CE v5 JSON / BloodHound.py `--zip` (with ACE,
   session, local-admin, delegation, trust and GPO-link mapping), and export a native CE
   v5 archive via `--zip`.
@@ -48,7 +55,7 @@ every gap is reported rather than faked. This page is the current boundary.
 | **Native CLI parity** | Broaden direct collection so fewer gaps need an import bridge. |
 | **Sessions & local-admin** | SMB/NetSession enumeration and `AdminTo`/`CanRDP`/`CanPSRemote` results. |
 | **Incremental merge** | SID-keyed incremental re-collection with **stale-edge expiry** (edges carry `first_seen`/`last_seen`). |
-| **NTLM / Kerberos / pass-the-hash** | First-class `--hashes`, `-k/--kerberos`, `--auth-method`; fail loudly today. |
+| **NTLM / Kerberos / pass-the-hash** | NTLM and pass-the-hash **shipped** (`--auth-method ntlm`, `--hashes`); Kerberos (`-k`) still fails loudly. |
 
 ## Exploratory
 

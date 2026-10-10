@@ -243,8 +243,26 @@ fakeable in tests.
 
 Primary collector, built on `go-ldap`:
 
-1. **Bind.** Authenticate to the DC (simple bind, or NTLM/SASL where offered);
-   credentials from `internal/creds` are zeroized after bind.
+1. **Bind** (`auth.go`). Authenticate to the DC before anything else, from one of
+   three methods, all resolved by `Options.EffectiveAuthMethod()`:
+
+   - **simple bind** (default) — DN or UPN + password over the LDAP bind.
+   - **NTLM** (`--auth-method ntlm`) — go-ldap's NTLMSSP bind (`NTLMBind`), so no
+     extra dependency; `DOMAIN\user` and `user@domain` principals are split by
+     `SplitUserDomain`. An empty password performs go-ldap's *unauthenticated*
+     NTLM bind rather than failing, matching BloodHound.py.
+   - **pass-the-hash** (`--hashes`) — the same NTLMSSP bind with the NT hash in
+     place of the password (`NTLMBindWithHash`). `NormalizeHash` accepts
+     impacket's `LM:NT` and bare `NT` forms and keeps only the NT half, because
+     the NTLMSSP response is derived from the NT hash alone. Supplying hashes
+     selects NTLM implicitly, exactly as BloodHound.py does.
+
+   `-k/--kerberos` resolves to a third method that currently **refuses to run**
+   with an explicit message. Every refusal (unknown method, `--hashes` with a
+   simple bind, Kerberos) happens in `validateOptions` **before any network
+   traffic**, and a cleartext (non-LDAPS) simple or NTLM bind is refused unless
+   `--allow-plaintext-ldap` is set, because NTLM over cleartext LDAP is relayable.
+   Credentials and hashes are `[]byte` and zeroed after use, like the password.
 2. **RootDSE + naming contexts.** Discover `defaultNamingContext`,
    `configurationNamingContext`, `rootDomainNamingContext`, supported controls.
 3. **Directory walk.** One paged search per category: **Users**
@@ -581,7 +599,8 @@ server-side rendering dependency.
 omenhound/
 ├── cmd/omenhound/            # main; subcommands (collect|import|serve|export|version)
 ├── internal/
-│   ├── collector/            # Collector interface + ldap.go, smb.go, sample.go, methods.go
+│   ├── collector/            # Collector interface + ldap.go, ldap_acl.go, ldap_container.go,
+│   │                         # ldap_trusts.go, auth.go, smb.go, sample.go, methods.go
 │   ├── bloodhound/           # BloodHound CE JSON/zip import + export
 │   ├── graph/                # Store interface + memory.go, neo4j.go
 │   ├── ingest/               # pipeline: strict decode, validate + merge
@@ -609,6 +628,9 @@ keeping the public API surface to exactly one package.
 - **Phase 1 — Skeleton pipeline.** `Collector` + `sample.go`; `Store` +
   `memory.go`; the CLI with all four subcommands and `export`. Deliverable:
   `make run-sample` works end to end with no AD and no Neo4j.
+- **Phase 1b — Auth surface (done).** `auth.go`: simple bind, **NTLM bind and
+  pass-the-hash** via go-ldap's NTLMSSP (no new dependency), with Kerberos as the
+  one method that refuses to run until it lands.
 - **Phase 2 — Ingestion + API.** `internal/ingest` validation/merge and
   `internal/api` read + ingest endpoints with auth. Deliverable: push a sample
   graph over HTTP and query it back.

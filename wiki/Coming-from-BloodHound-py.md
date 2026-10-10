@@ -25,11 +25,22 @@ directions, and **reports** anything it can't map.
 |---|---|---|
 | LDAP simple bind + LDAPS | ✓ | **✓ supported** |
 | LDAP simple bind + Kerberos (`-k`, `--kerberos`) | ✓ | roadmap — fails loudly until implemented |
-| Pass-the-hash (`--hashes`) | ✓ | roadmap — fails loudly |
-| NTLM auth (`--auth-method ntlm`) | ✓ | roadmap |
+| Pass-the-hash (`--hashes`) | ✓ | **✓** (`NT` or `LM:NT`; implies NTLM) |
+| NTLM auth (`--auth-method ntlm`) | ✓ | **✓** (plain password, hash, or empty password) |
 
 OmenHound refuses to silently fall back. If you pass an unsupported auth method, it
 tells you it is not implemented instead of collecting with weaker guarantees.
+
+NTLM and pass-the-hash use go-ldap's built-in NTLMSSP bind, so there is no extra
+dependency and no weaker protocol. Only the **NT** half of `--hashes` is used — the LM
+half is discarded because NTLMSSP derives the response from the NT hash. As with simple
+bind, a cleartext (non-LDAPS) NTLM bind is refused unless you pass
+`--allow-plaintext-ldap`, because NTLM over cleartext LDAP is relayable.
+
+> **Validation status.** The hash parsing (impacket's `LM:NT` and bare-NT forms), the
+> `DOMAIN\user` / `user@domain` split, the auth-method resolution and every refusal path
+> are unit-tested. The bind itself is **code-only**: no AD lab was available, so the
+> NTLMSSP handshake has not been exercised against a real DC.
 
 `--use-ldaps` and `-ns/--nameserver` (DC SRV discovery) behave as you expect.
 `--ldap-channel-binding` is accepted for parity and documented as a **no-op for simple

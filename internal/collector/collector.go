@@ -32,6 +32,13 @@ type Options struct {
 	// it can be zeroed after use.
 	Username string
 	Password []byte
+	// AuthMethod selects the bind: "simple" (default), "ntlm", or "kerberos".
+	// Empty means auto — simple bind unless Hashes is set, which selects NTLM.
+	AuthMethod string
+	// Hashes is the NTLM NT hash to bind with instead of a password
+	// (pass-the-hash, "LMHASH:NTHASH" or a bare 32-hex NT hash). []byte so it can
+	// be zeroed after use, like Password.
+	Hashes []byte
 	// Timeout bounds the whole run.
 	Timeout time.Duration
 	// IncludeSessions requests session collection (requires SMB; ldap-only
@@ -58,9 +65,19 @@ func validateOptions(o Options) error {
 	if o.Username == "" {
 		return errors.New("ldap: username is required (--username)")
 	}
+	method, err := o.EffectiveAuthMethod()
+	if err != nil {
+		return err
+	}
+	if method == AuthSimple && len(o.Hashes) > 0 {
+		return errors.New("ldap: --hashes only applies to NTLM; drop --auth-method simple or use --auth-method ntlm")
+	}
+	if method == AuthKerberos {
+		return errKerberosNotImplemented
+	}
 	if !o.UseLDAPS && !o.AllowPlaintextLDAP {
-		return errors.New("ldap: refusing plaintext LDAP; credentials would travel in the clear. " +
-			"Use --ldaps, or --allow-plaintext-ldap only on an isolated lab")
+		return errors.New("ldap: refusing plaintext LDAP; a simple or NTLM bind would expose credentials " +
+			"on the wire. Use --ldaps, or --allow-plaintext-ldap only on an isolated lab")
 	}
 	return nil
 }

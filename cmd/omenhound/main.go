@@ -105,6 +105,10 @@ func cmdCollect(args []string) int {
 		password         = fs.String("password", "", "bind password (prefer --password-stdin or $OMENHOUND_PASSWORD)")
 		passwordShort    = fs.String("p", "", "alias of --password")
 		passwordStdin    = fs.Bool("password-stdin", false, "read bind password from stdin")
+		authMethod       = fs.String("auth-method", "", "bind method: simple (default) | ntlm | kerberos")
+		hashes           = fs.String("hashes", "", "NTLM NT hash for pass-the-hash, as NT or LM:NT (implies --auth-method ntlm)")
+		kerberos         = fs.Bool("kerberos", false, "use Kerberos authentication (alias of --auth-method kerberos)")
+		kerberosShort    = fs.Bool("k", false, "alias of --kerberos")
 		plaintext        = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only; refused by default)")
 		timeout          = fs.Duration("timeout", 60*time.Second, "collection timeout")
 		collection       = fs.String("c", "", "collection methods, comma-separated (group,objectprops,... | all | default | dc)")
@@ -160,6 +164,38 @@ func cmdCollect(args []string) int {
 		log.Printf("collect: WARNING: collection method %q is not implemented — skipped", m)
 	}
 
+	// Authentication selection. BloodHound.py's rule applies: supplying hashes
+	// selects NTLM, and -k/--kerberos is just --auth-method kerberos.
+	authVal := *authMethod
+	if *kerberos || *kerberosShort {
+		if authVal != "" && !strings.EqualFold(authVal, collector.AuthKerberos) {
+			log.Printf("collect: --kerberos conflicts with --auth-method %s", authVal)
+			return 2
+		}
+		authVal = collector.AuthKerberos
+	}
+	if authVal != "" && !strings.EqualFold(authVal, collector.AuthKerberos) &&
+		!strings.EqualFold(authVal, collector.AuthNTLM) && !strings.EqualFold(authVal, collector.AuthSimple) {
+		log.Printf("collect: unknown --auth-method %q (want simple, ntlm or kerberos)", authVal)
+		return 2
+	}
+
+	var hashBytes []byte
+	if *hashes != "" {
+		nt, err := collector.NormalizeHash(*hashes)
+		if err != nil {
+			log.Printf("collect: %v", err)
+			return 2
+		}
+		if authVal != "" && !strings.EqualFold(authVal, collector.AuthNTLM) && !strings.EqualFold(authVal, collector.AuthKerberos) {
+			log.Printf("collect: --hashes requires NTLM authentication (--auth-method ntlm)")
+			return 2
+		}
+		hashBytes = []byte(nt)
+		defer zero(hashBytes)
+		log.Printf("WARNING: --hashes is visible in process listings; prefer --password-stdin or $OMENHOUND_PASSWORD")
+	}
+
 	pw, err := readPassword(passVal, *passwordStdin)
 	if err != nil {
 		log.Printf("collect: %v", err)
@@ -179,12 +215,16 @@ func cmdCollect(args []string) int {
 		Domain: domainVal, Server: serverVal, BaseDN: *baseDN, UseLDAPS: useTLSDial,
 		InsecureSkipVerify: *insecure, Username: userVal, Password: pw, Timeout: *timeout,
 		AllowPlaintextLDAP: *plaintext, Methods: &plan,
+		AuthMethod: authVal, Hashes: hashBytes,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.EffectiveTimeout())
 	defer cancel()
 
 	log.Printf("collect: using %q collector (timeout %s, methods %v)", c.Name(), opts.EffectiveTimeout(), plan.Implemented)
+	if m, err := opts.EffectiveAuthMethod(); err == nil && m != collector.AuthSimple {
+		log.Printf("collect: bind method %s", m)
+	}
 	g, err := c.Collect(ctx, opts)
 	if err != nil {
 		log.Printf("collect: %v", err)

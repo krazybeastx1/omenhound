@@ -71,6 +71,9 @@ If you already use `bloodhound-ce-python`, the collector accepts the same short 
 | `-ns`, `--nameserver` | DNS server used for **DC SRV discovery** (`_ldap._tcp.dc._msdcs.<domain>`) |
 | `-dc`, `--domain-controller` | DC host, if you don't want SRV discovery |
 | `--use-ldaps`, `--ldaps` | use LDAPS (636) |
+| `--auth-method` | `simple` (default), `ntlm`, or `kerberos` |
+| `--hashes` | NTLM **pass-the-hash**: `NT` or `LM:NT` (implies `--auth-method ntlm`) |
+| `-k`, `--kerberos` | Kerberos auth (alias of `--auth-method kerberos`) |
 | `-c`, `--collectionmethod` | comma-separated methods, or `all` / `default` / `dc` |
 | `-op`, `--outputprefix` | filename prefix for `--zip` output |
 | `--zip` | write a **BloodHound CE v5 archive** instead of Graph JSON |
@@ -82,6 +85,15 @@ Example with SRV discovery and a CE-compatible archive:
 ./bin/omenhound collect --collector ldap -d corp.local -ns 10.0.0.10 \
   -u 'CORP\svc' --password-stdin --use-ldaps -c group,objectprops \
   --zip -op corp_ --out corp_collection.zip
+```
+
+Pass-the-hash instead of a password (LDAPS strongly recommended; a cleartext NTLM
+bind is refused unless you add `--allow-plaintext-ldap`):
+
+```bash
+./bin/omenhound collect --collector ldap -d corp.local -dc 10.0.0.10 \
+  -u 'CORP\svc' --use-ldaps --hashes 'aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0' \
+  -c dc --out corp.json
 ```
 
 ### Collection methods (honest partial support)

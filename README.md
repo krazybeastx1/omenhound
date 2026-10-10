@@ -59,7 +59,7 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 
 | Piece | What it does |
 |---|---|
-| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and emits a graph. BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. Session/local-admin enrichment on the roadmap. |
+| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and emits a graph. Simple bind, NTLM and pass-the-hash (LDAPS recommended); BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. Session/local-admin enrichment on the roadmap. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
 | **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. |
@@ -167,9 +167,16 @@ bloodhound-ce-python -d cascade.local -u s.smith -p '...' -ns 10.129.46.41 -c al
 
 `-d/--domain`, `-u/--username`, `-p/--password`, `-ns/--nameserver` (DC SRV
 discovery), `-dc/--domain-controller`, `-c/--collectionmethod`, `-op/--outputprefix`,
-`--use-ldaps`, `--zip`. Unimplemented collection methods and unsupported auth
-methods (NTLM/Kerberos/pass-the-hash) **fail loudly or report an explicit
+`--use-ldaps`, `--zip`, `--auth-method`/`--hashes`/`-k`. Unimplemented collection
+methods and unsupported auth methods (Kerberos) **fail loudly or report an explicit
 "not implemented — skipped" warning** — they never degrade silently.
+
+Authentication is **simple bind** by default. `--auth-method ntlm` uses an NTLMSSP
+bind (no extra dependency), and `--hashes NT` or `--hashes LM:NT` performs
+**pass-the-hash** — the LM half is dropped, since NTLMSSP computes the response from
+the NT hash alone. `--hashes` implies NTLM, and cleartext NTLM is refused unless you
+pass `--allow-plaintext-ldap`. `-k/--kerberos` is accepted and **refuses to run** with
+a clear message until the Kerberos path lands.
 
 ---
 
@@ -274,8 +281,9 @@ or a database.
       *(parser and ACE mapping unit-tested against impacket-generated descriptors; the live LDAP path is code-only — no AD lab)*
 - [x] OU / GPO / container → `Contains` + `GPLink`, and domain trusts → `TrustedBy`
 - [ ] SMB session & local-admin (`AdminTo`, `CanPSRemote`, `HasSession`)
+- [x] NTLM bind (`--auth-method ntlm`) and pass-the-hash (`--hashes`) over LDAP/LDAPS
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
-- [ ] NTLM / Kerberos / pass-the-hash auth (`--hashes`, `-k`)
+- [ ] Kerberos auth (`-k`) — accepted and refuses to run until implemented
 - [ ] Customized BloodHound CE frontend (stock CE UI as fallback)
 
 ---

@@ -53,8 +53,8 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 	}
 	defer conn.Close()
 
-	if err := conn.Bind(o.Username, string(o.Password)); err != nil {
-		return nil, fmt.Errorf("ldap: bind as %q: %w", o.Username, err)
+	if err := bindLDAP(conn, o); err != nil {
+		return nil, err
 	}
 
 	g := &model.Graph{Meta: model.Meta{Collector: "ldap", Domain: o.Domain, StartedAt: time.Now().UTC()}}
