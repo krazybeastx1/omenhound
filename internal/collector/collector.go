@@ -40,6 +40,10 @@ type Options struct {
 	// AllowPlaintextLDAP permits binding over unencrypted LDAP. This is refused
 	// by default because it exposes credentials on the wire.
 	AllowPlaintextLDAP bool
+	// Methods is the resolved BloodHound.py-style collection-method plan. When
+	// set, the collector refuses to run if none of the requested methods are
+	// implemented, and reports the unimplemented ones as warnings.
+	Methods *MethodPlan
 }
 
 // validateOptions enforces the collector's safety invariants before any network

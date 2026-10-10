@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/krazybeastx1/omenhound/internal/ingest"
@@ -221,5 +222,67 @@ func TestImportRejectsGarbage(t *testing.T) {
 func TestLoadMissingPath(t *testing.T) {
 	if _, _, err := Load(filepath.Join(t.TempDir(), "nope.zip")); err == nil {
 		t.Fatal("expected an error for a missing path")
+	}
+}
+
+// TestExportCERoundTrip proves import -> export(CE zip) -> import is lossless
+// for every node and edge in the fixture.
+func TestExportCERoundTrip(t *testing.T) {
+	g, _, err := Load(writeZip(t, fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zipPath := filepath.Join(t.TempDir(), "out.zip")
+	members, err := WriteCEZip(zipPath, g, "rt_")
+	if err != nil {
+		t.Fatalf("WriteCEZip: %v", err)
+	}
+	if len(members) == 0 {
+		t.Fatal("no CE members written")
+	}
+	for _, m := range members {
+		if !strings.HasPrefix(m, "rt_") {
+			t.Errorf("member %q missing output prefix", m)
+		}
+	}
+
+	g2, rpt2, err := Load(zipPath)
+	if err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+	if err := ingest.Validate(g2); err != nil {
+		t.Fatalf("round-trip graph invalid: %v", err)
+	}
+
+	ids1 := map[string]bool{}
+	for _, n := range g.Nodes {
+		ids1[n.ID] = true
+	}
+	ids2 := map[string]bool{}
+	for _, n := range g2.Nodes {
+		ids2[n.ID] = true
+	}
+	if len(ids1) != len(ids2) {
+		t.Errorf("node count %d -> %d (%+v)", len(ids1), len(ids2), rpt2.Skipped)
+	}
+	for id := range ids1 {
+		if !ids2[id] {
+			t.Errorf("lost node %s", id)
+		}
+	}
+
+	e1, e2 := edgeSet(g), edgeSet(g2)
+	if len(e1) != len(e2) {
+		t.Errorf("edge count %d -> %d", len(e1), len(e2))
+	}
+	for k := range e1 {
+		if !e2[k] {
+			t.Errorf("lost edge %s", k)
+		}
+	}
+	for k := range e2 {
+		if !e1[k] {
+			t.Errorf("extra edge %s", k)
+		}
 	}
 }

@@ -38,6 +38,10 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 	if err := validateOptions(o); err != nil {
 		return nil, err
 	}
+	if o.Methods != nil && len(o.Methods.Implemented) == 0 {
+		return nil, fmt.Errorf("ldap: none of the requested collection methods are implemented "+
+			"(requested: %s; implemented: group, objectprops)", strings.Join(o.Methods.Requested, ","))
+	}
 	ctx, cancel := context.WithTimeout(ctx, o.EffectiveTimeout())
 	defer cancel()
 
@@ -52,6 +56,14 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 	}
 
 	g := &model.Graph{Meta: model.Meta{Collector: "ldap", Domain: o.Domain, StartedAt: time.Now().UTC()}}
+	if o.Methods != nil {
+		for _, m := range o.Methods.Skipped {
+			g.Meta.Warnings = append(g.Meta.Warnings, fmt.Sprintf("collection method %q is not implemented — skipped", m))
+		}
+	}
+	if o.IncludeSessions {
+		g.Meta.Warnings = append(g.Meta.Warnings, "session collection requires SMB and is not implemented by the LDAP collector — skipped")
+	}
 	baseDN := o.BaseDN
 	if baseDN == "" {
 		baseDN = DomainToDN(o.Domain)

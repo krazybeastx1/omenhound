@@ -94,6 +94,9 @@ type Meta struct {
 	Domain     string    `json:"domain,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
+	// Warnings records non-fatal, honest caveats about the run: requested
+	// collection methods that were not implemented, skipped features, etc.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Graph is a full collection result. It is the on-the-wire format between the

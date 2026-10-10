@@ -87,30 +87,86 @@ func run(args []string) int {
 func cmdCollect(args []string) int {
 	fs := flag.NewFlagSet("collect", flag.ContinueOnError)
 	var (
-		collectorName = fs.String("collector", "sample", "collector to use: sample|ldap")
-		domain        = fs.String("domain", "", "AD domain (e.g. corp.local)")
-		server        = fs.String("server", "", "DC host (host or host:port)")
-		baseDN        = fs.String("base-dn", "", "LDAP search base (default derived from --domain)")
-		ldaps         = fs.Bool("ldaps", false, "use LDAPS (636)")
-		insecure      = fs.Bool("insecure", false, "skip TLS verification (lab only)")
-		username      = fs.String("username", "", "bind username")
-		password      = fs.String("password", "", "bind password (prefer --password-stdin or $OMENHOUND_PASSWORD)")
-		passwordStdin = fs.Bool("password-stdin", false, "read bind password from stdin")
-		plaintext     = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only; refused by default)")
-		timeout       = fs.Duration("timeout", 60*time.Second, "collection timeout")
-		out           = fs.String("out", "-", "output file, or - for stdout")
+		collectorName    = fs.String("collector", "sample", "collector to use: sample|ldap")
+		domain           = fs.String("domain", "", "AD domain (e.g. corp.local)")
+		domainShort      = fs.String("d", "", "alias of --domain")
+		server           = fs.String("server", "", "DC host (host or host:port); overrides --dc/--ns")
+		dcFlag           = fs.String("dc", "", "domain controller host")
+		dcLong           = fs.String("domain-controller", "", "alias of --dc")
+		nsFlag           = fs.String("ns", "", "DNS server used for DC SRV discovery")
+		nsLong           = fs.String("nameserver", "", "alias of --ns")
+		baseDN           = fs.String("base-dn", "", "LDAP search base (default derived from --domain)")
+		ldaps            = fs.Bool("ldaps", false, "use LDAPS (636)")
+		useLDAPS         = fs.Bool("use-ldaps", false, "alias of --ldaps")
+		channelBinding   = fs.Bool("ldap-channel-binding", false, "LDAP channel binding (no-op for simple bind over LDAPS)")
+		insecure         = fs.Bool("insecure", false, "skip TLS verification (lab only)")
+		username         = fs.String("username", "", "bind username")
+		usernameShort    = fs.String("u", "", "alias of --username")
+		password         = fs.String("password", "", "bind password (prefer --password-stdin or $OMENHOUND_PASSWORD)")
+		passwordShort    = fs.String("p", "", "alias of --password")
+		passwordStdin    = fs.Bool("password-stdin", false, "read bind password from stdin")
+		plaintext        = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only; refused by default)")
+		timeout          = fs.Duration("timeout", 60*time.Second, "collection timeout")
+		collection       = fs.String("c", "", "collection methods, comma-separated (group,objectprops,... | all | default | dc)")
+		collectionLong   = fs.String("collectionmethod", "", "alias of --c")
+		zipOut           = fs.Bool("zip", false, "write a BloodHound CE v5 zip archive instead of Graph JSON")
+		outputPrefix     = fs.String("op", "", "output filename prefix for --zip")
+		outputPrefixLong = fs.String("outputprefix", "", "alias of --op")
+		out              = fs.String("out", "-", "output file, or - for stdout")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	pw, err := readPassword(*password, *passwordStdin)
+	domainVal := pick(*domain, *domainShort)
+	userVal := pick(*username, *usernameShort)
+	passVal := pick(*password, *passwordShort)
+	nsVal := pick(*nsFlag, *nsLong)
+	dcVal := pick(*dcFlag, *dcLong)
+	collVal := pick(*collection, *collectionLong)
+	prefixVal := pick(*outputPrefix, *outputPrefixLong)
+	useTLSDial := *ldaps || *useLDAPS
+
+	if *channelBinding && !useTLSDial {
+		log.Printf("collect: --ldap-channel-binding has no effect with LDAP simple bind (channel binding applies to NTLM/Kerberos); use --ldaps")
+	}
+
+	serverVal := *server
+	if serverVal == "" {
+		serverVal = dcVal
+	}
+	if serverVal == "" && nsVal != "" {
+		if domainVal == "" {
+			log.Printf("collect: --ns requires --domain")
+			return 2
+		}
+		rctx, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		discovered, err := collector.ResolveDC(rctx, nsVal, domainVal)
+		rcancel()
+		if err != nil {
+			log.Printf("collect: %v", err)
+			return 1
+		}
+		log.Printf("collect: discovered DC %s for %s via %s", discovered, domainVal, nsVal)
+		serverVal = discovered
+	}
+
+	plan, err := collector.PlanMethods(collVal)
+	if err != nil {
+		log.Printf("collect: %v", err)
+		return 2
+	}
+	for _, m := range plan.Skipped {
+		log.Printf("collect: WARNING: collection method %q is not implemented — skipped", m)
+	}
+
+	pw, err := readPassword(passVal, *passwordStdin)
 	if err != nil {
 		log.Printf("collect: %v", err)
 		return 1
 	}
 	defer zero(pw)
-	if *password != "" {
+	if passVal != "" {
 		log.Printf("WARNING: --password is visible in process listings; prefer --password-stdin or $OMENHOUND_PASSWORD")
 	}
 
@@ -120,21 +176,40 @@ func cmdCollect(args []string) int {
 		return 1
 	}
 	opts := collector.Options{
-		Domain: *domain, Server: *server, BaseDN: *baseDN, UseLDAPS: *ldaps,
-		InsecureSkipVerify: *insecure, Username: *username, Password: pw, Timeout: *timeout,
-		AllowPlaintextLDAP: *plaintext,
+		Domain: domainVal, Server: serverVal, BaseDN: *baseDN, UseLDAPS: useTLSDial,
+		InsecureSkipVerify: *insecure, Username: userVal, Password: pw, Timeout: *timeout,
+		AllowPlaintextLDAP: *plaintext, Methods: &plan,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.EffectiveTimeout())
 	defer cancel()
 
-	log.Printf("collect: using %q collector (timeout %s)", c.Name(), opts.EffectiveTimeout())
+	log.Printf("collect: using %q collector (timeout %s, methods %v)", c.Name(), opts.EffectiveTimeout(), plan.Implemented)
 	g, err := c.Collect(ctx, opts)
 	if err != nil {
 		log.Printf("collect: %v", err)
 		return 1
 	}
 	g.Meta.Version = version.Version
+	for _, w := range g.Meta.Warnings {
+		log.Printf("collect: WARNING: %s", w)
+	}
+
+	if *zipOut {
+		path := *out
+		if path == "" || path == "-" || !flagSet(fs, "out") {
+			path = prefixVal + time.Now().UTC().Format("20060102150405") + ".zip"
+		}
+		members, err := bloodhound.WriteCEZip(path, g, prefixVal)
+		if err != nil {
+			log.Printf("collect: %v", err)
+			return 1
+		}
+		log.Printf("collect: wrote BloodHound CE archive %s (%d nodes, %d edges, members %v)",
+			path, len(g.Nodes), len(g.Edges), members)
+		return 0
+	}
+
 	if err := writeGraphFile(*out, g); err != nil {
 		log.Printf("collect: %v", err)
 		return 1
@@ -143,30 +218,57 @@ func cmdCollect(args []string) int {
 	return 0
 }
 
+func pick(primary, alias string) string {
+	if primary != "" {
+		return primary
+	}
+	return alias
+}
+
+func flagSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 // ---- serve ----
 
 func cmdServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var (
-		addr          = fs.String("addr", "127.0.0.1:8080", "listen address")
-		collectorName = fs.String("collector", "sample", "collector to seed the graph with: sample|ldap|none")
-		domain        = fs.String("domain", "", "AD domain (ldap collector)")
-		server        = fs.String("server", "", "DC host (ldap collector)")
-		baseDN        = fs.String("base-dn", "", "LDAP search base")
-		ldaps         = fs.Bool("ldaps", false, "use LDAPS")
-		insecure      = fs.Bool("insecure", false, "skip TLS verification (lab only)")
-		username      = fs.String("username", "", "bind username")
-		password      = fs.String("password", "", "bind password (prefer $OMENHOUND_PASSWORD)")
-		plaintext     = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only)")
-		timeout       = fs.Duration("timeout", 60*time.Second, "collection timeout")
-		neo4jURI      = fs.String("neo4j-uri", "", "Neo4j URI (bolt://host:7687); empty = in-memory")
-		neo4jUser     = fs.String("neo4j-user", "neo4j", "Neo4j user")
-		neo4jDB       = fs.String("neo4j-database", "neo4j", "Neo4j database")
-		apiToken      = fs.String("api-token", os.Getenv("OMENHOUND_API_TOKEN"), "bearer token enabling write endpoints (env OMENHOUND_API_TOKEN)")
-		enableOps     = fs.Bool("enable-credential-ops", false, "enable the gated AD password-change endpoint (authorized lab only)")
-		auditLog      = fs.String("audit-log", "", "audit log file (default stderr)")
-		writeRate     = fs.Int("write-rate-limit", 120, "max write requests per minute per client IP")
-		writeBurst    = fs.Int("write-burst", 30, "write request burst per client IP")
+		addr           = fs.String("addr", "127.0.0.1:8080", "listen address")
+		collectorName  = fs.String("collector", "sample", "collector to seed the graph with: sample|ldap|none")
+		domain         = fs.String("domain", "", "AD domain (ldap collector)")
+		domainShort    = fs.String("d", "", "alias of --domain")
+		server         = fs.String("server", "", "DC host (ldap collector); overrides --dc/--ns")
+		dcFlag         = fs.String("dc", "", "domain controller host")
+		dcLong         = fs.String("domain-controller", "", "alias of --dc")
+		nsFlag         = fs.String("ns", "", "DNS server for DC SRV discovery")
+		nsLong         = fs.String("nameserver", "", "alias of --ns")
+		baseDN         = fs.String("base-dn", "", "LDAP search base")
+		ldaps          = fs.Bool("ldaps", false, "use LDAPS")
+		useLDAPS       = fs.Bool("use-ldaps", false, "alias of --ldaps")
+		insecure       = fs.Bool("insecure", false, "skip TLS verification (lab only)")
+		username       = fs.String("username", "", "bind username")
+		usernameShort  = fs.String("u", "", "alias of --username")
+		password       = fs.String("password", "", "bind password (prefer $OMENHOUND_PASSWORD)")
+		passwordShort  = fs.String("p", "", "alias of --password")
+		plaintext      = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only)")
+		timeout        = fs.Duration("timeout", 60*time.Second, "collection timeout")
+		collection     = fs.String("c", "", "collection methods (comma-separated | all | default | dc)")
+		collectionLong = fs.String("collectionmethod", "", "alias of --c")
+		neo4jURI       = fs.String("neo4j-uri", "", "Neo4j URI (bolt://host:7687); empty = in-memory")
+		neo4jUser      = fs.String("neo4j-user", "neo4j", "Neo4j user")
+		neo4jDB        = fs.String("neo4j-database", "neo4j", "Neo4j database")
+		apiToken       = fs.String("api-token", os.Getenv("OMENHOUND_API_TOKEN"), "bearer token enabling write endpoints (env OMENHOUND_API_TOKEN)")
+		enableOps      = fs.Bool("enable-credential-ops", false, "enable the gated AD password-change endpoint (authorized lab only)")
+		auditLog       = fs.String("audit-log", "", "audit log file (default stderr)")
+		writeRate      = fs.Int("write-rate-limit", 120, "max write requests per minute per client IP")
+		writeBurst     = fs.Int("write-burst", 30, "write request burst per client IP")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -217,10 +319,38 @@ func cmdServe(args []string) int {
 			log.Printf("serve: %v", err)
 			return 1
 		}
-		pw, _ := readPassword(*password, false)
-		opts := collector.Options{Domain: *domain, Server: *server, BaseDN: *baseDN, UseLDAPS: *ldaps,
-			InsecureSkipVerify: *insecure, Username: *username, Password: pw, Timeout: *timeout,
-			AllowPlaintextLDAP: *plaintext}
+		domainVal := pick(*domain, *domainShort)
+		userVal := pick(*username, *usernameShort)
+		passVal := pick(*password, *passwordShort)
+		serverVal := *server
+		if serverVal == "" {
+			serverVal = pick(*dcFlag, *dcLong)
+		}
+		if serverVal == "" {
+			if nsVal := pick(*nsFlag, *nsLong); nsVal != "" {
+				rctx, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+				discovered, derr := collector.ResolveDC(rctx, nsVal, domainVal)
+				rcancel()
+				if derr != nil {
+					log.Printf("serve: %v", derr)
+					return 1
+				}
+				log.Printf("serve: discovered DC %s for %s via %s", discovered, domainVal, nsVal)
+				serverVal = discovered
+			}
+		}
+		plan, perr := collector.PlanMethods(pick(*collection, *collectionLong))
+		if perr != nil {
+			log.Printf("serve: %v", perr)
+			return 2
+		}
+		for _, m := range plan.Skipped {
+			log.Printf("serve: WARNING: collection method %q is not implemented — skipped", m)
+		}
+		pw, _ := readPassword(passVal, false)
+		opts := collector.Options{Domain: domainVal, Server: serverVal, BaseDN: *baseDN, UseLDAPS: *ldaps || *useLDAPS,
+			InsecureSkipVerify: *insecure, Username: userVal, Password: pw, Timeout: *timeout,
+			AllowPlaintextLDAP: *plaintext, Methods: &plan}
 		cctx, ccancel := context.WithTimeout(ctx, opts.EffectiveTimeout())
 		g, err := c.Collect(cctx, opts)
 		ccancel()
@@ -228,6 +358,9 @@ func cmdServe(args []string) int {
 		if err != nil {
 			log.Printf("serve: seed collection with %q failed: %v", c.Name(), err)
 		} else {
+			for _, w := range g.Meta.Warnings {
+				log.Printf("serve: WARNING: %s", w)
+			}
 			res, err := ingest.Write(ctx, store, g)
 			if err != nil {
 				log.Printf("serve: ingest seed graph: %v", err)
