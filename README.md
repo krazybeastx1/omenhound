@@ -37,6 +37,10 @@
   <img alt="Backend" src="https://img.shields.io/badge/graph-Neo4j-008CC1?logo=neo4j&logoColor=white">
 </p>
 
+<p align="center">
+  <a href="https://github.com/krazybeastx1/omenhound/wiki"><b>📖 Full guide in the wiki →</b></a>
+</p>
+
 > [!WARNING]
 > **OmenHound is dual-use offensive security tooling.** It enumerates Active
 > Directory, maps attack paths to Domain Admin, and *optionally* changes AD
@@ -53,7 +57,8 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 
 | Piece | What it does |
 |---|---|
-| **Collector** (`omenhound collect`) | Enumerates AD over LDAP/LDAPS (users, groups, computers, membership) and emits a graph. SMB/share probing included; ACL/session/trust enrichment on the roadmap. |
+| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership) and emits a graph. BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. ACL/session/trust enrichment on the roadmap. |
+| **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
 | **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. |
 | **Dynamic abuse engine** | For every edge, renders a copy-pasteable abuse command by interpolating **real node properties**, with a per-technique **OPSEC/detection note** and Windows event IDs. |
@@ -68,6 +73,14 @@ bloodyAD --host DC.omenhound.lab -d omenhound.lab -u jdoe -p '<password>' set pa
 ```
 
 — with the real sAMAccountName, DN, and domain from *your* graph.
+
+---
+
+## Screenshots
+
+| Attack-path graph | Dynamic abuse panel | Write-API auth gate |
+|---|---|---|
+| ![graph](docs/wiki/img/webui-graph.png) | ![abuse](docs/wiki/img/webui-abuse.png) | ![gate](docs/wiki/img/webui-authgate.png) |
 
 ---
 
@@ -122,7 +135,8 @@ export OMENHOUND_API_TOKEN="$(openssl rand -hex 32)"
 ## CLI
 
 ```
-omenhound collect [flags]     # run a collector, write Graph JSON
+omenhound collect [flags]     # run a collector, write Graph JSON (or a CE zip)
+omenhound import  [flags]     # import BloodHound CE JSON/zip into Graph JSON
 omenhound serve   [flags]     # ingestion API + web UI
 omenhound export  [flags]     # convert a Graph JSON (json | csv)
 omenhound version
@@ -131,6 +145,29 @@ omenhound version
 Key flags: `--collector sample|ldap`, `--domain`, `--server`, `--ldaps`,
 `--base-dn`, `--username`, `--password-stdin`, `--neo4j-uri`, `--api-token`,
 `--enable-credential-ops`, `--audit-log`. Run `omenhound <cmd> -h` for the rest.
+
+### BloodHound.py-compatible flags
+
+`omenhound collect` accepts the same short flags as `bloodhound-ce-python`:
+
+```bash
+# your existing workflow
+bloodhound-ce-python -d cascade.local -u s.smith -p '...' -ns 10.129.46.41 -c all --zip
+# ...or drive OmenHound directly, CE-archive output included
+./bin/omenhound collect --collector ldap -d cascade.local -ns 10.129.46.41 \
+  -u 'CASCADE\s.smith' --password-stdin --use-ldaps -c group,objectprops \
+  --zip -op cascade_ --out cascade_bloodhound.zip
+
+# and merge existing BloodHound output into OmenHound
+./bin/omenhound import --in cascade_bloodhound.zip --out cascade.json
+./bin/omenhound import --in cascade_bloodhound.zip --api http://127.0.0.1:8080 --token "$OMENHOUND_API_TOKEN"
+```
+
+`-d/--domain`, `-u/--username`, `-p/--password`, `-ns/--nameserver` (DC SRV
+discovery), `-dc/--domain-controller`, `-c/--collectionmethod`, `-op/--outputprefix`,
+`--use-ldaps`, `--zip`. Unimplemented collection methods and unsupported auth
+methods (NTLM/Kerberos/pass-the-hash) **fail loudly or report an explicit
+"not implemented — skipped" warning** — they never degrade silently.
 
 ---
 
@@ -188,6 +225,19 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Documentation
 
+**Full guides live in the [wiki](https://github.com/krazybeastx1/omenhound/wiki):**
+
+- [Getting Started](https://github.com/krazybeastx1/omenhound/wiki/Getting-Started) — install, sample mode, real collection, import.
+- [How It Works](https://github.com/krazybeastx1/omenhound/wiki/How-It-Works) — packages, data model, edge directions.
+- [Web UI Guide](https://github.com/krazybeastx1/omenhound/wiki/Web-UI-Guide) — graph, abuse panel, auth gate (with screenshots).
+- [Operations & Hardening](https://github.com/krazybeastx1/omenhound/wiki/Operations-and-Hardening) — secure defaults, gating, audit, OPSEC.
+- [API Reference](https://github.com/krazybeastx1/omenhound/wiki/API-Reference) — every HTTP endpoint and payload.
+- [Neo4j Schema & Attack Paths](https://github.com/krazybeastx1/omenhound/wiki/Neo4j-Schema-and-Attack-Paths) — labels, relationship types, Cypher.
+- [Coming from BloodHound.py](https://github.com/krazybeastx1/omenhound/wiki/Coming-from-BloodHound-py) — flag/method/format compatibility.
+- [Roadmap](https://github.com/krazybeastx1/omenhound/wiki/Roadmap).
+
+In-repo references:
+
 - [Architecture](docs/ARCHITECTURE.md) — components, data model, collector/graph contracts, phases.
 - [Attack paths](docs/ATTACK-PATHS.md) — every edge type: meaning, abuse command, OPSEC + event IDs.
 - [Threat model](docs/THREAT-MODEL.md) — assets, trust boundaries, STRIDE, mitigations, residual risk.
@@ -212,10 +262,14 @@ or a database.
 - [x] BloodHound CE-compatible Neo4j schema
 - [x] Dynamic abuse commands + OPSEC
 - [x] Gated `unicodePwd` password change + audit
+- [x] BloodHound CE JSON / BloodHound.py `--zip` **import** and CE-archive **export**
+- [x] BloodHound.py-compatible collection flags, method planning, SRV DC discovery
+- [x] Token-gated write API in the web UI
 - [ ] ACL (`nTSecurityDescriptor`/SDDL) → `GenericAll`/`WriteDacl`/… edges
 - [ ] SMB session & local-admin (`AdminTo`, `CanPSRemote`, `HasSession`)
 - [ ] GPO, OU, trust collection
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
+- [ ] NTLM / Kerberos / pass-the-hash auth (`--hashes`, `-k`)
 - [ ] Customized BloodHound CE frontend (stock CE UI as fallback)
 
 ---

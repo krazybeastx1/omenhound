@@ -13,15 +13,25 @@ edges along those paths. Four first-class components:
 
 1. **Collector** (`internal/collector`) — a static Go binary, the SharpHound
    equivalent. Speaks LDAP (`go-ldap`) and SMB (`go-smb2`); RPC/DCOM is planned.
-   Emits a `model.Graph`.
-2. **Graph backend** (`internal/graph`) — a `Store` interface with in-memory
+   Emits a `model.Graph`. `methods.go` plans BloodHound.py-compatible collection
+   methods (`-c …`) and performs DC SRV discovery; unimplemented methods are
+   reported as explicit warnings and never silently dropped.
+2. **BloodHound interop** (`internal/bloodhound`) — imports BloodHound CE v5 JSON
+   and `bloodhound-ce-python --zip` archives into `model.Graph` (SIDs/GUIDs kept
+   verbatim, CE edge directions, unmappable ACE rights counted), and exports an
+   OmenHound graph as a native CE v5 archive (`--zip`). Import → export → import
+   is lossless on the test fixture.
+3. **Graph backend** (`internal/graph`) — a `Store` interface with in-memory
    (`memory.go`) and Neo4j (`neo4j.go`) implementations; the schema mirrors
    BloodHound CE so CE queries keep working.
-3. **Ingestion/API service** (`internal/ingest`, `internal/api`) — accepts
+4. **Ingestion/API service** (`internal/ingest`, `internal/api`) — accepts
    `model.Graph` payloads, persists them through the `Store`, answers graph
-   queries, renders abuse commands, and serves the UI.
-4. **Web UI** (`web`) — initially a customized BloodHound CE UI with static
-   templates made dynamic; fallback is the stock CE UI as a static bundle.
+   queries, renders abuse commands, and serves the UI. Write endpoints (ingest,
+   credentials, password change) require a bearer token; rate-limited, paginated.
+5. **Web UI** (`web/static`) — a dependency-free vanilla-JS canvas force graph
+   embedded in the binary, with a node inspector, per-edge abuse panel, search,
+   and a token-gated write control. A customized BloodHound CE UI remains the
+   planned alternative, with the stock CE UI as fallback.
 
 ### Goals
 
@@ -517,19 +527,21 @@ server-side rendering dependency.
 
 ```text
 omenhound/
-├── cmd/omenhound/            # main; subcommands (collect|serve|export|version)
+├── cmd/omenhound/            # main; subcommands (collect|import|serve|export|version)
 ├── internal/
-│   ├── collector/            # Collector interface + ldap.go, smb.go, sample.go
+│   ├── collector/            # Collector interface + ldap.go, smb.go, sample.go, methods.go
+│   ├── bloodhound/           # BloodHound CE JSON/zip import + export
 │   ├── graph/                # Store interface + memory.go, neo4j.go
-│   ├── ingest/               # pipeline: validate + merge
-│   ├── api/                  # HTTP handlers, routing, auth middleware
+│   ├── ingest/               # pipeline: strict decode, validate + merge
+│   ├── api/                  # HTTP handlers, routing, auth/rate-limit middleware
 │   ├── abuse/                # edge -> template -> rendered command + OPSEC
 │   ├── creds/                # memory-only credential vault (redacting types)
 │   ├── audit/                # append-only JSONL audit log
+│   ├── act/                  # the only AD write path (unicodePwd over LDAPS)
 │   └── version/              # version.Version, set via -ldflags
 ├── pkg/model/                # model.go — the shared data contract (public)
-├── web/                      # UI source; web/dist is build output (gitignored)
-├── scripts/  testdata/ docs/ # Cypher setup; fixtures; design docs
+├── web/static/               # embedded UI (index.html, app.js, styles.css)
+├── scripts/  testdata/ docs/ # helpers; fixtures; design docs + wiki source
 ├── Makefile · go.mod         # build targets; module github.com/.../omenhound
 ```
 
@@ -558,6 +570,11 @@ keeping the public API surface to exactly one package.
   the stock-CE fallback green.
 - **Phase 7 — Gated capabilities.** `internal/creds` vault, `internal/audit`,
   and the opt-in/lab/approval-gated live credential change.
+- **Phase 8 — Interop + hardening (done).** `internal/bloodhound` CE v5 import and
+  `--zip` export; BloodHound.py-compatible collect flags with method planning and
+  SRV DC discovery; graph/API optimization (O(1) dedup, adjacency, batched
+  `UNWIND`, rate limits, pagination, security headers); token-gated write API in
+  the embedded UI.
 
 **Cadence:** `make all` = `vet test build`; `make run-sample` for the
 zero-dependency demo; `go test ./...` must pass with only the memory store.
