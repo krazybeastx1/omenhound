@@ -1,0 +1,27 @@
+# Binaries
+/omenhound
+/omenhoundd
+/bin/
+/dist/
+*.exe
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.txt
+
+# Local runtime output — never commit locks, dumps, creds, or audit logs
+/data/
+*.bh.json
+*.dump
+audit-*.jsonl
+*.env
+.env
+
+# Vendored/derived UI build output (source lives in web/src)
+web/dist/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

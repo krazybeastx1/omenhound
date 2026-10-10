@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OmenHound</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark">◈</span> OmenHound</div>
+  <div class="stats" id="stats">loading…</div>
+  <div class="spacer"></div>
+  <input id="search" type="search" placeholder="filter by name / sAMAccountName / SID" autocomplete="off" />
+  <button id="reload" title="reload graph">Reload</button>
+</header>
+
+<main>
+  <canvas id="graph"></canvas>
+
+  <aside class="panel" id="panel">
+    <div class="panel-empty" id="panel-empty">
+      <h2>Select a node or edge</h2>
+      <p>Click a node to inspect it, or click an edge to get a dynamic abuse command with an OPSEC note.</p>
+      <p class="legend" id="legend"></p>
+    </div>
+
+    <section class="panel-body" id="panel-node" hidden>
+      <h2 id="node-title"></h2>
+      <dl id="node-props"></dl>
+      <h3>Outgoing</h3>
+      <ul id="node-out" class="edges"></ul>
+      <h3>Incoming</h3>
+      <ul id="node-in" class="edges"></ul>
+    </section>
+
+    <section class="panel-body" id="panel-edge" hidden>
+      <h2 id="edge-title"></h2>
+      <p id="edge-summary" class="muted"></p>
+      <h3>Command</h3>
+      <pre id="edge-command"></pre>
+      <div id="edge-alts-wrap" hidden>
+        <h3>Alternates</h3>
+        <pre id="edge-alts"></pre>
+      </div>
+      <h3>OPSEC</h3>
+      <p id="edge-opsec" class="muted"></p>
+      <p id="edge-events" class="muted"></p>
+      <p id="edge-warnings" class="warn"></p>
+    </section>
+  </aside>
+</main>
+
+<footer class="foot">
+  <span id="health"></span>
+  <span class="muted">Dual-use security tooling — authorized use only.</span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

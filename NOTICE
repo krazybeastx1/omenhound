@@ -1,0 +1,39 @@
+OmenHound
+Copyright (c) 2026 krazybeastx1
+
+This product is licensed under the MIT License (see LICENSE).
+
+--------------------------------------------------------------------------
+Attribution and third-party notices
+--------------------------------------------------------------------------
+
+1. BloodHound CE (SpecterOps), Apache License 2.0
+   https://github.com/SpecterOps/BloodHound
+
+   OmenHound implements the BloodHound CE graph *schema* (node kinds and edge
+   names) so that existing BloodHound Cypher queries remain compatible. As of
+   this writing, no BloodHound source code or assets are vendored into this
+   repository.
+
+   If/when the BloodHound CE web UI (or any other Apache-2.0 component) is
+   vendored under web/, the following obligations apply and MUST be honored:
+     - retain the upstream LICENSE and NOTICE files for the vendored code;
+     - retain all copyright, patent, trademark, and attribution notices;
+     - mark any modified files as changed;
+     - ship a copy of the Apache-2.0 license text with the distribution.
+   Because a mixed MIT + Apache-2.0 repository is fine but adds obligations,
+   relicensing the whole project to Apache-2.0 is the intended path if the
+   upstream UI is adopted. See docs/ARCHITECTURE.md for the UI strategy.
+
+--------------------------------------------------------------------------
+Go dependencies (see go.mod for exact versions)
+--------------------------------------------------------------------------
+
+  github.com/go-ldap/ldap/v3            MIT
+  github.com/hirochachacha/go-smb2      MIT
+  github.com/neo4j/neo4j-go-driver/v5   Apache-2.0
+  github.com/Azure/go-ntlmssp           MIT
+  github.com/geoffgarside/ber           BSD-3-Clause
+  github.com/go-asn1-ber/asn1-ber       MIT
+  github.com/google/uuid                BSD-3-Clause
+  golang.org/x/crypto                   BSD-3-Clause

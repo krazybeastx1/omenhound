@@ -1,0 +1,216 @@
+{
+  "nodes": [
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330",
+      "kind": "Domain",
+      "name": "OMENHOUND",
+      "domain": "omenhound.lab",
+      "distinguished_name": "DC=omenhound,DC=lab"
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-512",
+      "kind": "Group",
+      "name": "Domain Admins",
+      "domain": "omenhound.lab",
+      "sam_account_name": "Domain Admins",
+      "distinguished_name": "CN=Domain Admins,CN=Users,DC=omenhound,DC=lab",
+      "props": {
+        "admincount": "true",
+        "highvalue": "true"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-513",
+      "kind": "Group",
+      "name": "Domain Users",
+      "domain": "omenhound.lab",
+      "sam_account_name": "Domain Users",
+      "distinguished_name": "CN=Domain Users,CN=Users,DC=omenhound,DC=lab"
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1101",
+      "kind": "Group",
+      "name": "IT Admins",
+      "domain": "omenhound.lab",
+      "sam_account_name": "IT Admins",
+      "distinguished_name": "CN=IT Admins,OU=Groups,DC=omenhound,DC=lab"
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1102",
+      "kind": "Group",
+      "name": "SQL Admins",
+      "domain": "omenhound.lab",
+      "sam_account_name": "SQL Admins",
+      "distinguished_name": "CN=SQL Admins,OU=Groups,DC=omenhound,DC=lab"
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-500",
+      "kind": "User",
+      "name": "Administrator",
+      "domain": "omenhound.lab",
+      "sam_account_name": "Administrator",
+      "distinguished_name": "CN=Administrator,CN=Users,DC=omenhound,DC=lab",
+      "props": {
+        "admincount": "true",
+        "enabled": "true",
+        "highvalue": "true"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1103",
+      "kind": "User",
+      "name": "John Doe",
+      "domain": "omenhound.lab",
+      "sam_account_name": "jdoe",
+      "distinguished_name": "CN=John Doe,OU=Users,DC=omenhound,DC=lab",
+      "props": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1104",
+      "kind": "User",
+      "name": "Alice Smith",
+      "domain": "omenhound.lab",
+      "sam_account_name": "alice",
+      "distinguished_name": "CN=Alice Smith,OU=Users,DC=omenhound,DC=lab",
+      "props": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1105",
+      "kind": "User",
+      "name": "SQL Service",
+      "domain": "omenhound.lab",
+      "sam_account_name": "svc_sql",
+      "distinguished_name": "CN=SQL Service,OU=Service Accounts,DC=omenhound,DC=lab",
+      "props": {
+        "enabled": "true"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1000",
+      "kind": "Computer",
+      "name": "DC01",
+      "domain": "omenhound.lab",
+      "sam_account_name": "DC01$",
+      "distinguished_name": "CN=DC01,OU=Domain Controllers,DC=omenhound,DC=lab",
+      "props": {
+        "os": "Windows Server 2022"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1001",
+      "kind": "Computer",
+      "name": "WEB01",
+      "domain": "omenhound.lab",
+      "sam_account_name": "WEB01$",
+      "distinguished_name": "CN=WEB01,OU=Servers,DC=omenhound,DC=lab",
+      "props": {
+        "os": "Windows Server 2019"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1002",
+      "kind": "Computer",
+      "name": "SQL01",
+      "domain": "omenhound.lab",
+      "sam_account_name": "SQL01$",
+      "distinguished_name": "CN=SQL01,OU=Servers,DC=omenhound,DC=lab",
+      "props": {
+        "os": "Windows Server 2022"
+      }
+    },
+    {
+      "id": "S-1-5-21-1004336348-1177238915-682003330-1003",
+      "kind": "Computer",
+      "name": "WS01",
+      "domain": "omenhound.lab",
+      "sam_account_name": "WS01$",
+      "distinguished_name": "CN=WS01,OU=Workstations,DC=omenhound,DC=lab",
+      "props": {
+        "os": "Windows 11"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-500",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-512",
+      "kind": "MemberOf"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1103",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-513",
+      "kind": "MemberOf"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1104",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1101",
+      "kind": "MemberOf"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1105",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1102",
+      "kind": "MemberOf"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1101",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-512",
+      "kind": "MemberOf"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-512",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1000",
+      "kind": "AdminTo"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1101",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1001",
+      "kind": "AdminTo"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1102",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1002",
+      "kind": "AdminTo"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1002",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1001",
+      "kind": "AdminTo"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1103",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1003",
+      "kind": "GenericAll"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1003",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1002",
+      "kind": "GenericWrite"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1104",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1001",
+      "kind": "HasSession"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330-1105",
+      "target": "S-1-5-21-1004336348-1177238915-682003330",
+      "kind": "DCSync"
+    },
+    {
+      "source": "S-1-5-21-1004336348-1177238915-682003330",
+      "target": "S-1-5-21-1004336348-1177238915-682003330-1000",
+      "kind": "Contains"
+    }
+  ],
+  "meta": {
+    "collector": "sample",
+    "version": "dev",
+    "domain": "omenhound.lab",
+    "started_at": "2026-10-10T11:32:25.671608187Z",
+    "finished_at": "2026-10-10T11:32:25.671608187Z"
+  }
+}

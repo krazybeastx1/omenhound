@@ -1,0 +1,432 @@
+// Package api exposes OmenHound's graph and, when explicitly enabled, its
+// gated credential-change action over HTTP. Every write endpoint requires a
+// bearer token and is fully audited.
+package api
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"io"
+	"io/fs"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/krazybeastx1/omenhound/internal/abuse"
+	"github.com/krazybeastx1/omenhound/internal/act"
+	"github.com/krazybeastx1/omenhound/internal/audit"
+	"github.com/krazybeastx1/omenhound/internal/creds"
+	"github.com/krazybeastx1/omenhound/internal/graph"
+	"github.com/krazybeastx1/omenhound/internal/ingest"
+	"github.com/krazybeastx1/omenhound/pkg/model"
+	"github.com/krazybeastx1/omenhound/web"
+)
+
+// PasswordChanger is the AD write action, injected so the API can be tested
+// without a domain.
+type PasswordChanger func(ctx context.Context, o act.Options, targetDN string, newPassword []byte) error
+
+// Config wires the server's dependencies.
+type Config struct {
+	Store      *graph.Memory // fallback store used only if StoreIface is nil
+	StoreIface graph.Store
+
+	Creds *creds.Store
+	Audit *audit.Logger
+
+	Version string
+
+	// APIToken gates all write endpoints. If empty, writes are refused.
+	APIToken string
+	// EnableCredentialOps enables the AD password-change endpoint (off by
+	// default; lab/authorized use only).
+	EnableCredentialOps bool
+	// ChangePassword performs the AD write. Required when EnableCredentialOps.
+	ChangePassword PasswordChanger
+	// ActServer is the DC host used for credential operations.
+	ActServer string
+	// ActInsecureSkipVerify disables TLS verification for the AD write (lab only).
+	ActInsecureSkipVerify bool
+
+	// Logger for request logging; defaults to stderr.
+	Logger *log.Logger
+}
+
+// Server is the HTTP handler for OmenHound.
+type Server struct {
+	cfg   Config
+	store graph.Store
+	creds *creds.Store
+	audit *audit.Logger
+	log   *log.Logger
+}
+
+// New builds a Server, filling defaults.
+func New(cfg Config) *Server {
+	store := cfg.StoreIface
+	if store == nil && cfg.Store != nil {
+		store = cfg.Store
+	}
+	if store == nil {
+		store = graph.NewMemory()
+	}
+	c := cfg.Creds
+	if c == nil {
+		c = creds.NewStore(15*time.Minute, 64)
+	}
+	a := cfg.Audit
+	if a == nil {
+		a = audit.New(io.Discard)
+	}
+	lg := cfg.Logger
+	if lg == nil {
+		lg = log.New(io.Discard, "", 0)
+	}
+	return &Server{cfg: cfg, store: store, creds: c, audit: a, log: lg}
+}
+
+// Handler returns the routed, panic-safe HTTP handler.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
+	mux.HandleFunc("GET /api/v1/graph", s.handleGraph)
+	mux.HandleFunc("GET /api/v1/nodes", s.handleNodes)
+	mux.HandleFunc("GET /api/v1/edges", s.handleEdges)
+	mux.HandleFunc("GET /api/v1/nodes/{id}", s.handleNode)
+	mux.HandleFunc("GET /api/v1/nodes/{id}/neighbors", s.handleNeighbors)
+	mux.HandleFunc("GET /api/v1/abuse", s.handleAbuse)
+	mux.HandleFunc("GET /api/v1/abuse/supported", s.handleAbuseSupported)
+
+	mux.HandleFunc("POST /api/v1/ingest", s.handleIngest)
+	mux.HandleFunc("POST /api/v1/credentials", s.handleCredentialPut)
+	mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.handleCredentialDelete)
+	mux.HandleFunc("POST /api/v1/credentials/{id}/change-password", s.handleChangePassword)
+
+	sub, err := fs.Sub(web.FS, "static")
+	if err == nil {
+		mux.Handle("/", http.FileServer(http.FS(sub)))
+	}
+
+	return s.recover(mux)
+}
+
+func (s *Server) recover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.log.Printf("PANIC %s %s: %v", r.Method, r.URL.Path, rec)
+				writeErr(w, http.StatusInternalServerError, "internal error")
+			}
+			s.log.Printf("%s %s %s (%s)", r.Method, r.URL.Path, r.RemoteAddr, time.Since(start).Round(time.Millisecond))
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ---- read handlers ----
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                 "ok",
+		"version":                s.cfg.Version,
+		"credential_ops_enabled": s.cfg.EnableCredentialOps,
+		"write_api_enabled":      s.cfg.APIToken != "",
+		"time":                   time.Now().UTC(),
+	})
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	st, err := s.store.Stats(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	nodes, err := s.store.AllNodes(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	edges, err := s.store.AllEdges(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes, "edges": edges})
+}
+
+func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	nodes, err := s.store.AllNodes(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, nodes)
+}
+
+func (s *Server) handleEdges(w http.ResponseWriter, r *http.Request) {
+	edges, err := s.store.AllEdges(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, edges)
+}
+
+func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	nodes, err := s.store.AllNodes(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, n := range nodes {
+		if n.ID == id {
+			writeJSON(w, http.StatusOK, n)
+			return
+		}
+	}
+	writeErr(w, http.StatusNotFound, "node not found")
+}
+
+func (s *Server) handleNeighbors(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	out, err := s.store.Neighbors(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	in, err := s.store.Incoming(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"outgoing": out, "incoming": in})
+}
+
+func (s *Server) handleAbuseSupported(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"edges": abuse.Supported()})
+}
+
+func (s *Server) handleAbuse(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	srcID, kind, dstID := q.Get("src"), q.Get("kind"), q.Get("dst")
+	if srcID == "" || kind == "" || dstID == "" {
+		writeErr(w, http.StatusBadRequest, "src, kind and dst query parameters are required")
+		return
+	}
+	nodes, err := s.store.AllNodes(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	idx := make(map[string]model.Node, len(nodes))
+	for _, n := range nodes {
+		idx[n.ID] = n
+	}
+	src, ok := idx[srcID]
+	if !ok {
+		writeErr(w, http.StatusNotFound, "source node not found")
+		return
+	}
+	dst, ok := idx[dstID]
+	if !ok {
+		writeErr(w, http.StatusNotFound, "target node not found")
+		return
+	}
+	edge := model.Edge{Source: srcID, Target: dstID, Kind: model.EdgeKind(kind)}
+	rendered, ok := abuse.Render(edge, src, dst)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no abuse template for edge kind "+kind)
+		return
+	}
+	writeJSON(w, http.StatusOK, rendered)
+}
+
+// ---- write handlers ----
+
+// requireWrite enforces the bearer token. It returns false and writes a
+// response when the request must not proceed.
+func (s *Server) requireWrite(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.APIToken == "" {
+		writeErr(w, http.StatusForbidden, "write API is disabled: start the server with --api-token to enable it")
+		return false
+	}
+	got := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.APIToken)) != 1 {
+		s.audit.Log(audit.Event{Actor: "unknown", Action: "auth", Target: r.URL.Path, Result: "denied", Reason: "bad or missing bearer token", RemoteAddr: r.RemoteAddr})
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
+	g, err := ingest.Decode(r.Body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := ingest.Write(r.Context(), s.store, g)
+	if err != nil {
+		s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "error", Reason: err.Error(), RemoteAddr: r.RemoteAddr})
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "ok", RemoteAddr: r.RemoteAddr,
+		Fields: map[string]string{"nodes": itoa(res.Nodes), "edges": itoa(res.Edges)}})
+	writeJSON(w, http.StatusOK, res)
+}
+
+type credPutReq struct {
+	Domain   string `json:"domain"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func (s *Server) handleCredentialPut(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
+	if !s.cfg.EnableCredentialOps {
+		writeErr(w, http.StatusForbidden, "credential operations are disabled (start with --enable-credential-ops on an authorized lab)")
+		return
+	}
+	var req credPutReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	secret := []byte(req.Password)
+	id, exp, err := s.creds.Put(req.Domain, req.Username, secret)
+	creds.Zero(secret)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit.Log(audit.Event{Actor: "api", Action: "credential.put", Target: req.Domain + "\\" + req.Username, Result: "ok", RemoteAddr: r.RemoteAddr})
+	writeJSON(w, http.StatusCreated, map[string]any{"session_id": id, "expires": exp})
+}
+
+func (s *Server) handleCredentialDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	s.creds.Delete(id)
+	s.audit.Log(audit.Event{Actor: "api", Action: "credential.delete", Target: id, Result: "ok", RemoteAddr: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+}
+
+type changePwReq struct {
+	TargetDN    string `json:"target_dn"`
+	TargetSID   string `json:"target_sid"`
+	NewPassword string `json:"new_password"`
+	Reason      string `json:"reason"`
+}
+
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if !s.cfg.EnableCredentialOps {
+		writeErr(w, http.StatusForbidden, "credential operations are disabled")
+		return
+	}
+	if s.cfg.ChangePassword == nil {
+		writeErr(w, http.StatusNotImplemented, "no password changer configured")
+		return
+	}
+	// Explicit per-action approval gate.
+	if !strings.EqualFold(r.Header.Get("X-Omenhound-Approval"), "yes") {
+		s.audit.Log(audit.Event{Actor: "api", Action: "credential.change_password", Target: id, Result: "denied", Reason: "missing X-Omenhound-Approval: yes", RemoteAddr: r.RemoteAddr})
+		writeErr(w, http.StatusPreconditionRequired, "this action requires the header X-Omenhound-Approval: yes")
+		return
+	}
+	var req changePwReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	cred, err := s.creds.Take(id) // one-shot
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	defer cred.Destroy()
+
+	newPw := []byte(req.NewPassword)
+	defer creds.Zero(newPw)
+
+	o := act.Options{
+		Server:             s.cfg.ActServer,
+		Domain:             cred.Domain,
+		Username:           cred.Username,
+		Password:           cred.Reveal(),
+		InsecureSkipVerify: s.cfg.ActInsecureSkipVerify,
+	}
+	err = s.cfg.ChangePassword(r.Context(), o, req.TargetDN, newPw)
+	result := "ok"
+	status := http.StatusOK
+	if err != nil {
+		result, status = "error", http.StatusBadGateway
+	}
+	s.audit.Log(audit.Event{
+		Actor: "api", Action: "credential.change_password", Target: req.TargetDN,
+		Result: result, Reason: req.Reason, RemoteAddr: r.RemoteAddr,
+		Fields: map[string]string{"target_sid": req.TargetSID},
+	})
+	if err != nil {
+		writeErr(w, status, err.Error())
+		return
+	}
+	writeJSON(w, status, map[string]any{"changed": req.TargetDN, "target_sid": req.TargetSID})
+}
+
+// ---- helpers ----
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
