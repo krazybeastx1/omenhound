@@ -253,10 +253,8 @@ Primary collector, built on `go-ldap`:
    `adminCount`, `pwdLastSet`, `lastLogon`, `servicePrincipalName`, `memberOf`,
    `primaryGroupID`; **Groups** `(objectCategory=group)` → `member`, `groupType`,
    well-known RIDs; **Computers** `(objectCategory=computer)` → `operatingSystem`,
-   `operatingSystemVersion`, `lastLogon`, `dNSHostName`; **GPOs**
-   (`groupPolicyContainer`) → `displayName`, `gPCFileSysPath`, `gPLink`,
-   `gPOptions`; **OUs/Containers** for structure and GPO linkage; **Domains** →
-   `trustDirection`, `trustPartner`, `trustType`, `trustAttributes`.
+   `operatingSystemVersion`, `lastLogon`, `dNSHostName`. Object *structure*
+   (OUs, containers, GPOs) and domain trusts are collected by step 5.
 4. **ACL collection** (`-c acl`; `ldap_acl.go`, `adacl.go`,
    `security_descriptor.go`). Read `nTSecurityDescriptor` under the
    `LDAP_SERVER_SD_FLAGS_OID` control (owner + DACL), parse the self-relative
@@ -287,9 +285,40 @@ Primary collector, built on `go-ldap`:
    uses). The **live LDAP path is code-only**: with no AD lab available, the
    schema fetch, the SD-flags control, and the per-object searches have not been
    exercised against a domain controller.
-5. **Membership edges.** `primaryGroupID` is not in `member`, so a `MemberOf`
+5. **Container collection** (`-c container`; `ldap_container.go`). Mirrors
+   BloodHound.py's `do_container_collection`. GPOs
+   (`(objectCategory=groupPolicyContainer)`, keyed by `objectGUID`), OUs
+   (`(objectCategory=organizationalUnit)`) and containers
+   (`(&(objectCategory=container)(objectClass=container))`) become nodes; the
+   direct children of each — plus the domain head — are read with a
+   single-level search and turned into **`Contains`** edges
+   (`parent -Contains-> child`), and each container's `gPLink` attribute
+   ([MS-GPOL] 2.2.1.1.1) into **`GPLink`** edges
+   (`GPO -GPLink-> container`), with `Props["enforced"]` for option `2`.
+   Disabled links (option `1`/`3`) are omitted exactly as BloodHound.py does and
+   counted in `Meta.Warnings`; a link whose GPO was not enumerated keeps its edge
+   by taking the GUID out of the link DN. Objects are keyed by `objectGUID` in
+   BloodHound's canonical uppercase form, so a direct collection is
+   indistinguishable from an import.
+
+6. **Trust collection** (`-c trusts`; `ldap_trusts.go`). Reads
+   `(objectClass=trustedDomain)` under `CN=System` and emits
+   **`TrustedBy`** edges between `Domain` nodes in BloodHound's direction,
+   `(trusted domain) -TrustedBy-> (trusting domain)`, derived from
+   `trustDirection`; the peer is keyed by its domain SID. `trustAttributes` is
+   classified into BloodHound's trust type / transitivity / SID-filtering triple
+   (a faithful port of `ADDomainTrust.to_output`) and carried on the edge's
+   `Props` (`trusttype`, `transitive`, `sidfilteringenabled`). Trusts with no
+   usable direction produce no edge and are counted in `Meta.Warnings`.
+
+   *Validation status.* The parsers and mappings (gPLink, GPO-DN GUID extraction,
+   the filtered-container rules, class→kind, trust classification) are
+   unit-tested; as with the ACL pass, the **live LDAP path is code-only** — no AD
+   lab was available, so the searches have not been run against a DC.
+
+7. **Membership edges.** `primaryGroupID` is not in `member`, so a `MemberOf`
    edge is synthesized from `primaryGroupID` + domain SID.
-6. **Materialize** a `model.Graph` with `Meta.Collector = "ldap"`.
+8. **Materialize** a `model.Graph` with `Meta.Collector = "ldap"`.
 
 ### 4.3 SMB collection (`smb.go`)
 
@@ -585,10 +614,12 @@ keeping the public API surface to exactly one package.
   graph over HTTP and query it back.
 - **Phase 3 — Neo4j backend.** `neo4j.go` + constraints/indexes; verify CE
   queries run against a populated DB. Deliverable: CE compatibility smoke test.
-- **Phase 4 — LDAP + SMB collection.** `ldap.go` (users/groups/computers/OUs/
-  GPOs/membership/trusts, paging, primary-group synthesis), `ldap_acl.go` +
-  `adacl.go` + `security_descriptor.go` (ACL edges — **done**), and `smb.go`
-  (sessions, local admin, remote-access edges, TTL/expiry wiring).
+- **Phase 4 — LDAP + SMB collection.** `ldap.go` (users/groups/computers/
+  membership, paging, primary-group synthesis), `ldap_acl.go` + `adacl.go` +
+  `security_descriptor.go` (ACL edges — **done**), `ldap_container.go`
+  (OU/GPO/container + `Contains`/`GPLink` — **done**), `ldap_trusts.go`
+  (`TrustedBy` — **done**), and `smb.go` (sessions, local admin, remote-access
+  edges, TTL/expiry wiring).
 - **Phase 5 — Abuse renderer.** `internal/abuse` templates + OPSEC, wired to
   `/api/v1/abuse`.
 - **Phase 6 — UI.** Customize CE templates to the dynamic OmenHound API; keep

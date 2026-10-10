@@ -23,10 +23,10 @@ func TestPlanMethodsAllReportsUnimplemented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops", "acl"}) {
+	if !reflect.DeepEqual(p.Implemented, []string{"group", "trusts", "objectprops", "acl", "container"}) {
 		t.Fatalf("all implemented = %v", p.Implemented)
 	}
-	want := map[string]bool{"localadmin": true, "session": true, "trusts": true, "container": true, "dcom": true, "rdp": true, "psremote": true, "loggedon": true}
+	want := map[string]bool{"localadmin": true, "session": true, "dcom": true, "rdp": true, "psremote": true, "loggedon": true}
 	if len(p.Skipped) != len(want) {
 		t.Fatalf("all skipped = %v, want %d entries", p.Skipped, len(want))
 	}
@@ -38,17 +38,17 @@ func TestPlanMethodsAllReportsUnimplemented(t *testing.T) {
 }
 
 func TestPlanMethodsDConly(t *testing.T) {
+	// `dc` expands to group, trusts, objectprops, acl, container — every one of
+	// which the LDAP collector now implements, so nothing is skipped.
 	p, err := PlanMethods("dc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(p.Implemented, []string{"group", "objectprops", "acl"}) {
+	if !reflect.DeepEqual(p.Implemented, []string{"group", "trusts", "objectprops", "acl", "container"}) {
 		t.Fatalf("dc implemented = %v", p.Implemented)
 	}
-	for _, m := range []string{"trusts", "container"} {
-		if !contains(p.Skipped, m) {
-			t.Errorf("dc should skip %q, got %v", m, p.Skipped)
-		}
+	if len(p.Skipped) != 0 {
+		t.Fatalf("dc skipped = %v, want none", p.Skipped)
 	}
 }
 
@@ -86,11 +86,19 @@ func TestPlanMethodsUnknown(t *testing.T) {
 	}
 }
 
-func contains(hay []string, needle string) bool {
-	for _, s := range hay {
-		if s == needle {
-			return true
+func TestPlanMethodsContainerAndTrustsAlone(t *testing.T) {
+	// `container` and `trusts` are self-sufficient passes: each creates the
+	// nodes it needs, so requesting one alone skips nothing.
+	for _, m := range []string{"container", "trusts"} {
+		p, err := PlanMethods(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(p.Implemented, []string{m}) {
+			t.Fatalf("%s implemented = %v", m, p.Implemented)
+		}
+		if len(p.Skipped) != 0 {
+			t.Fatalf("%s skipped = %v, want none", m, p.Skipped)
 		}
 	}
-	return false
 }

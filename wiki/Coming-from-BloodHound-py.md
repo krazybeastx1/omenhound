@@ -47,9 +47,9 @@ Requested methods are planned up front. What OmenHound can't collect yet is repo
 | `dc` / `dconly` | ✓ | expands (see notes) |
 | `localadmin` | ✓ | not implemented |
 | `session` / `loggedon` | ✓ | not implemented |
-| `trusts` | ✓ | not implemented |
+| `trusts` | ✓ | **✓** (see status note) |
 | `acl` | ✓ | **✓** (see status note) |
-| `container` | ✓ | not implemented |
+| `container` | ✓ | **✓** (see status note) |
 | `dcom` / `rdp` / `psremote` | ✓ | not implemented |
 | `all`, `default` | ✓ | expand to the above |
 
@@ -62,12 +62,30 @@ BloodHound.py: `Owns`, `GenericAll`, `GenericWrite`, `WriteDacl`, `WriteOwner`,
 `WriteGPLink`. The pass is self-sufficient — it also creates the OU/GPO/container
 nodes it needs — so `-c acl` works on its own.
 
+**Structure collection is now native** (`-c container`). GPOs, OUs and containers
+are collected as nodes keyed by `objectGUID` (BloodHound's canonical uppercase form);
+each container's direct children become `Contains` edges and each container's `gPLink`
+becomes `GPO -GPLink-> container` edges, with `enforced` recorded for option-2 links.
+Disabled links (option `1`/`3`) are omitted exactly as BloodHound.py does, and a link
+whose GPO was not enumerated keeps its edge by taking the GUID out of the link DN.
+
+**Trust collection is now native** (`-c trusts`). `trustedDomain` objects under
+`CN=System` become `TrustedBy` edges between `Domain` nodes in BloodHound's direction
+(`(trusted domain) -TrustedBy-> (trusting domain)`) from `trustDirection`; the peer is
+keyed by its domain SID. `trustAttributes` is classified into BloodHound's trust type,
+transitivity and SID-filtering triple (ported from `ADDomainTrust.to_output`) and
+carried on the edge. `-c dc` / `-c dconly` now expands to methods that are **all**
+implemented, so it skips nothing.
+
 > **Validation status.** The descriptor parser and the ACE→edge mapping are
 > unit-tested against security descriptors built to `[MS-DTYP]` and independently
-> re-parsed with **impacket** (the library BloodHound.py itself uses). The **live
-> LDAP path** — schema GUID fetch, the `LDAP_SERVER_SD_FLAGS` control, and the
-> per-object searches — is **code-only**: no AD lab was available to run it end to
-> end, so treat first contact with a real DC as unverified.
+> re-parsed with **impacket** (the library BloodHound.py itself uses). The
+> `-c container` and `-c trusts` parsers (gPLink, GPO-DN GUID extraction, the
+> filtered-container rules, class→kind, trust classification) are unit-tested too.
+> The **live LDAP path** — schema GUID fetch, the `LDAP_SERVER_SD_FLAGS` control,
+> the per-object and per-child searches, and the `trustedDomain` search — is
+> **code-only**: no AD lab was available to run it end to end, so treat first
+> contact with a real DC as unverified.
 
 Where a gap exists, **import** is the bridge: collect the missing data with
 BloodHound.py/CE and `omenhound import` it. The graph then contains those edges (ACL

@@ -59,7 +59,7 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 
 | Piece | What it does |
 |---|---|
-| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership, and — with `-c acl` — object security descriptors → ACL edges) and emits a graph. BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. Session/trust enrichment on the roadmap. |
+| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and emits a graph. BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. Session/local-admin enrichment on the roadmap. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
 | **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. |
@@ -272,8 +272,8 @@ or a database.
 - [x] Token-gated write API in the web UI
 - [x] ACL (`nTSecurityDescriptor`) → `Owns`/`GenericAll`/`WriteDacl`/`GetChanges`/… edges
       *(parser and ACE mapping unit-tested against impacket-generated descriptors; the live LDAP path is code-only — no AD lab)*
+- [x] OU / GPO / container → `Contains` + `GPLink`, and domain trusts → `TrustedBy`
 - [ ] SMB session & local-admin (`AdminTo`, `CanPSRemote`, `HasSession`)
-- [ ] GPO, OU, trust collection
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
 - [ ] NTLM / Kerberos / pass-the-hash auth (`--hashes`, `-k`)
 - [ ] Customized BloodHound CE frontend (stock CE UI as fallback)

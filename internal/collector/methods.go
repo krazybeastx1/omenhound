@@ -28,7 +28,7 @@ var bloodhoundMethods = []string{
 // implementedMethodList is the ordered list of methods OmenHound's LDAP
 // collector can perform. It is exported to operators in error/warning text, so
 // it has a single source of truth here.
-var implementedMethodList = []string{"group", "objectprops", "acl"}
+var implementedMethodList = []string{"group", "objectprops", "acl", "trusts", "container"}
 
 // implementedMethods is the lookup form of implementedMethodList.
 var implementedMethods = func() map[string]bool {

@@ -123,24 +123,10 @@ func collectACL(conn *ldap.Conn, o Options, g *model.Graph, dnIndex map[string]s
 	}
 
 	known := g.NodeIndex()
-	// upsert adds a node, or merges props into an existing one.
-	upsert := func(n model.Node) {
-		if cur, ok := known[n.ID]; ok {
-			if len(n.Props) > 0 {
-				if cur.Props == nil {
-					cur.Props = map[string]string{}
-				}
-				for k, v := range n.Props {
-					cur.Props[k] = v
-				}
-				g.AddNode(cur)
-				known[n.ID] = cur
-			}
-			return
-		}
-		g.AddNode(n)
-		known[n.ID] = n
-	}
+	// upsert adds a node, or merges it into an existing one. Several passes can
+	// reach the same object (an OU is also a container, etc.), so creation must
+	// never drop properties another pass recorded.
+	upsert := func(n model.Node) { upsertNode(g, known, n) }
 	ensurePrincipal := func(sid string) {
 		if sid == "" {
 			return
@@ -285,7 +271,11 @@ func fetchSchemaGUIDs(conn *ldap.Conn, schemaDN string) (map[string]GUID, error)
 	return out, nil
 }
 
-// guidOf returns an entry's objectGUID in canonical form, or "" when absent.
+// guidOf returns an entry's objectGUID in BloodHound's canonical form, or ""
+// when absent. GUID-keyed objects (OUs, GPOs, containers) use this form as their
+// node ID, so every pass that reaches them agrees on the identity. It is
+// uppercase to match the objectIdentifier BloodHound.py and SharpHound emit, so
+// a directly collected graph is indistinguishable from an imported one.
 func guidOf(e *ldap.Entry) string {
 	raw := rawAttr(e, "objectGUID")
 	if len(raw) != 16 {
@@ -293,7 +283,7 @@ func guidOf(e *ldap.Entry) string {
 	}
 	var g GUID
 	copy(g[:], raw)
-	return g.String()
+	return strings.ToUpper(g.String())
 }
 
 // attr and rawAttr read an attribute case-insensitively. AD echoes attribute

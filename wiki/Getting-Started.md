@@ -86,22 +86,27 @@ Example with SRV discovery and a CE-compatible archive:
 
 ### Collection methods (honest partial support)
 
-OmenHound implements the **`group`**, **`objectprops`**, and **`acl`** methods (users,
-groups, computers, membership, their properties, and object security descriptors → ACL
-edges). Any other method you request is reported explicitly — never silently dropped:
+OmenHound implements the **`group`**, **`objectprops`**, **`acl`**, **`trusts`** and
+**`container`** methods: users, groups, computers and membership; their properties;
+object security descriptors → ACL edges; `trustedDomain` objects → `TrustedBy` edges;
+and OUs/GPOs/containers → `Contains` + `GPLink` edges. `-c dc` / `-c dconly` expands to
+`group,trusts,objectprops,acl,container`, so it skips nothing. Any *other* method you
+request is reported explicitly — never silently dropped:
 
 ```
 collect: WARNING: collection method "session" is not implemented — skipped
-collect: WARNING: collection method "trusts" is not implemented — skipped
+collect: WARNING: collection method "localadmin" is not implemented — skipped
 ```
 
 If you ask for **only** unimplemented methods (e.g. `-c session`), the collector
 **refuses to run** rather than pretending it collected something.
 
-The `acl` pass is self-sufficient: `-c acl` on its own emits the ACL edges and creates
-the `OU`/`GPO`/`Container` nodes it needs. One caveat on validation — the descriptor
-parser and ACE mapping are tested against **impacket**-generated descriptors, but the
-live LDAP path has not yet been exercised against a real domain controller.
+Each pass is self-sufficient: `-c acl` emits ACL edges and creates the
+`OU`/`GPO`/`Container` nodes it needs, and `-c container` builds the containment tree
+without needing `acl`. One caveat on validation — the parsers and mappings are tested
+against **impacket**-generated descriptors and hand-built fixtures, but the live LDAP
+path has not yet been exercised against a real domain controller, so treat first
+contact with a DC as unverified.
 
 See **[Coming from BloodHound.py](Coming-from-BloodHound-py)** for the full method table.
 
@@ -166,7 +171,7 @@ your own Cypher) at the same database.
 |---|---|
 | `ldap: refusing plaintext LDAP` | Add `--ldaps`. Plaintext bind leaks credentials; only override with `--allow-plaintext-ldap` on a lab. |
 | `collector: unknown collection method "x"` | Typo, or a method OmenHound doesn't know. Known names are listed in the error. |
-| `ldap: none of the requested collection methods are implemented` | You asked for only unimplemented methods. Use `group`/`objectprops`/`all`. |
+| `ldap: none of the requested collection methods are implemented` | You asked for only unimplemented methods. Use `group`/`objectprops`/`acl`/`trusts`/`container`/`all`/`dc`. |
 | `dns: could not discover a DC` | SRV lookup failed; pass `-dc <host>` instead of `-ns`, or check DNS. |
 | `import: no JSON files inside …zip` | Wrong archive. Point at the `--zip` output from BloodHound.py/CE. |
 | `write API is disabled` | Start `serve` with `--api-token`. |

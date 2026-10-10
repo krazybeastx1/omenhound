@@ -14,8 +14,9 @@ import (
 )
 
 // LDAPCollector enumerates users, groups, computers, their group membership,
-// and (with -c acl) object security descriptors over LDAP/LDAPS. Session, trust,
-// and container collection are planned (see docs/ARCHITECTURE.md).
+// OUs/GPOs/containers, domain trusts, and (with -c acl) object security
+// descriptors over LDAP/LDAPS. Session and local-admin collection require SMB and
+// are implemented by the SMB collector, not here (see docs/ARCHITECTURE.md).
 type LDAPCollector struct{}
 
 // Name implements Collector.
@@ -153,6 +154,20 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 			if mid, ok := dnIndex[dn]; ok {
 				g.AddEdge(model.Edge{Source: mid, Target: gid, Kind: model.EdgeMemberOf})
 			}
+		}
+	}
+
+	// OU/GPO/container collection (`-c container`) and domain trusts
+	// (`-c trusts`). Run before the ACL pass so that ACL-only nodes merge into
+	// fully populated ones rather than the other way round.
+	if methodRequested(o.Methods, "container") {
+		if err := collectContainers(conn, o, g, dnIndex, baseDN); err != nil {
+			return nil, err
+		}
+	}
+	if methodRequested(o.Methods, "trusts") {
+		if err := collectTrusts(conn, o, g, dnIndex, baseDN); err != nil {
+			return nil, err
 		}
 	}
 

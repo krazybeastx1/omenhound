@@ -17,6 +17,16 @@ every gap is reported rather than faked. This page is the current boundary.
   ACE-principal nodes. *Status:* the descriptor parser and ACE→edge mapping are
   unit-tested against **impacket**-generated descriptors; the live LDAP path is
   **code-only** (no AD lab available).
+- **Container collection** (`-c container`) — GPOs, OUs and containers keyed by
+  `objectGUID`; `Contains` edges for each container's direct children and
+  `GPO -GPLink-> container` edges with `enforced` recorded. Disabled links are omitted
+  as BloodHound.py omits them, and a link whose GPO was not enumerated keeps its edge by
+  taking the GUID from the link DN. *Status:* the parsing/mapping helpers are
+  unit-tested; the live LDAP path is **code-only** (no AD lab available).
+- **Trust collection** (`-c trusts`) — `trustedDomain` objects become `TrustedBy` edges
+  between `Domain` nodes in BloodHound's direction, with trust type, transitivity and
+  SID-filtering carried on the edge. `-c dc` / `-c dconly` now expands to fully
+  implemented methods. *Status:* parsing/mapping unit-tested; live path **code-only**.
 - **BloodHound CE interop** — import CE v5 JSON / BloodHound.py `--zip` (with ACE,
   session, local-admin, delegation, trust and GPO-link mapping), and export a native CE
   v5 archive via `--zip`.
@@ -37,7 +47,6 @@ every gap is reported rather than faked. This page is the current boundary.
 |---|---|
 | **Native CLI parity** | Broaden direct collection so fewer gaps need an import bridge. |
 | **Sessions & local-admin** | SMB/NetSession enumeration and `AdminTo`/`CanRDP`/`CanPSRemote` results. |
-| **GPO / OU / trust collection** | Complete `GPLink`, `Contains` and `TrustedBy` collection natively. |
 | **Incremental merge** | SID-keyed incremental re-collection with **stale-edge expiry** (edges carry `first_seen`/`last_seen`). |
 | **NTLM / Kerberos / pass-the-hash** | First-class `--hashes`, `-k/--kerberos`, `--auth-method`; fail loudly today. |
 
