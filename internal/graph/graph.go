@@ -42,6 +42,51 @@ type Store interface {
 	AllEdges(ctx context.Context) ([]model.Edge, error)
 	// Stats returns node/edge counts.
 	Stats(ctx context.Context) (Stats, error)
+	// SearchNodes returns nodes matching query, optionally filtered by kind/domain.
+	SearchNodes(ctx context.Context, q string, kind model.Kind, domain string, limit, offset int) ([]model.Node, int, error)
+	// Domains returns all distinct domains present in the graph.
+	Domains(ctx context.Context) ([]string, error)
+	// ShortestPaths returns a limited set of shortest paths from source to target.
+	ShortestPaths(ctx context.Context, req ShortestPathRequest) (ShortestPathResult, error)
 	// Close releases backend resources.
 	Close(ctx context.Context) error
+}
+
+// Direction indicates graph traversal direction for relationships.
+type Direction int
+
+const (
+	// Outgoing traverses edges in their stored direction (source -> target).
+	Outgoing Direction = iota
+	// Incoming traverses edges against their stored direction.
+	Incoming
+	// Undirected traverses relationships in both directions.
+	Undirected
+)
+
+// ShortestPathRequest defines constraints for path searches.
+type ShortestPathRequest struct {
+	SourceID                    string
+	TargetID                    string
+	MaxDepth                    int
+	MaxPaths                    int
+	Direction                   Direction
+	IncludeNodeTypes            []model.Kind
+	ExcludeNodeTypes            []model.Kind
+	IncludeRelationshipTypes    []model.EdgeKind
+	ExcludeRelationshipTypes    []model.EdgeKind
+	RequiredIntermediateNodeIDs []string
+}
+
+// Path is an ordered sequence of nodes and edges forming a path.
+type Path struct {
+	Nodes         []model.Node `json:"nodes"`
+	Relationships []model.Edge `json:"relationships"`
+	Length        int          `json:"length"`
+}
+
+// ShortestPathResult is the result set for a shortest-path query.
+type ShortestPathResult struct {
+	Paths     []Path `json:"paths"`
+	Truncated bool   `json:"truncated"`
 }

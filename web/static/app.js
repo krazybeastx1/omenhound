@@ -123,6 +123,23 @@ function draw() {
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   }
+  // edge labels (when zoomed in or selected)
+  if (view.k > 0.8) {
+    ctx.save();
+    ctx.font = "10px ui-sans-serif,system-ui,sans-serif";
+    ctx.fillStyle = "rgba(230,233,240,0.8)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const e of edges) {
+      const a = toScreen(byId.get(e.source));
+      const b = toScreen(byId.get(e.target));
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const label = e.kind;
+      ctx.fillText(label, mx, my);
+    }
+    ctx.restore();
+  }
 
   // nodes
   for (const n of nodes) {
@@ -400,6 +417,7 @@ document.getElementById("gate-push").addEventListener("click", async () => {
 
 async function refresh() {
   await loadGraph();
+  try { await loadDomains(); } catch(e){}
   const res = await fetch("/api/v1/health");
   const h = await res.json();
   document.getElementById("health").textContent =
@@ -409,3 +427,178 @@ async function refresh() {
 
 resize();
 refresh().then(loop);
+
+function setView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  if (name === 'graph') {
+    setTimeout(() => { resize(); tick(); }, 10);
+  }
+  try { if (name === 'domains') loadDomains(); else if (name === 'users') loadUsers(); else if (name === 'groups') loadGroups(); else if (name === 'computers') loadComputers(); else if (name === 'ous') loadOUs(); loadDomains(); } catch(e){}
+}
+
+document.querySelectorAll('.nav-btn').forEach(b => {
+  b.addEventListener('click', () => setView(b.dataset.view));
+});
+
+async function loadDomains() {
+  try {
+    const r = await fetch('/api/v1/domains');
+    const j = await r.json();
+    const sel = document.getElementById('domainSelect');
+    if (sel) {
+      sel.innerHTML = '<option value="">All Domains</option>';
+      (j.domains || []).forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d; opt.textContent = d; sel.appendChild(opt);
+      });
+    }
+  } catch(e) {}
+}
+
+async function loadObjects(type, opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.domain) params.set('domain', opts.domain);
+  if (opts.search) params.set('search', opts.search);
+  if (type) params.set('type', type);
+  params.set('limit', '100');
+  if (opts.offset) params.set('offset', opts.offset);
+  const r = await fetch('/api/v1/objects?' + params);
+  return await r.json();
+}
+
+let currentDomain = '';
+
+document.getElementById('domainSelect').addEventListener('change', e => {
+  currentDomain = e.target.value;
+  if (document.querySelector('.nav-btn.active').dataset.view === 'users') loadUsers();
+  if (document.querySelector('.nav-btn.active').dataset.view === 'groups') loadGroups();
+  if (document.querySelector('.nav-btn.active').dataset.view === 'computers') loadComputers();
+  if (document.querySelector('.nav-btn.active').dataset.view === 'ous') loadOUs();
+});
+
+async function loadUsers() {
+  const res = await loadObjects('User', {domain: currentDomain, search: document.getElementById('userSearch').value});
+  const tbl = document.getElementById('usersTable');
+  tbl.innerHTML = '<thead><tr><th>Name</th><th>SAM</th><th>Domain</th><th>SID</th></tr></thead><tbody>' +
+    (res.nodes||[]).map(n => `<tr><td>${escapeHtml(n.name||'')}</td><td>${escapeHtml(n.sam_account_name||'')}</td><td>${escapeHtml(n.domain||'')}</td><td>${escapeHtml(n.id||'')}</td></tr>`).join('') + '</tbody>';
+}
+document.getElementById('userSearch').addEventListener('input', () => loadUsers());
+
+async function loadGroups() {
+  const res = await loadObjects('Group', {domain: currentDomain, search: document.getElementById('groupSearch').value});
+  const tbl = document.getElementById('groupsTable');
+  tbl.innerHTML = '<thead><tr><th>Name</th><th>Domain</th><th>ID</th></tr></thead><tbody>' +
+    (res.nodes||[]).map(n => `<tr><td>${escapeHtml(n.name||'')}</td><td>${escapeHtml(n.domain||'')}</td><td>${escapeHtml(n.id||'')}</td></tr>`).join('') + '</tbody>';
+}
+document.getElementById('groupSearch').addEventListener('input', () => loadGroups());
+
+async function loadComputers() {
+  const res = await loadObjects('Computer', {domain: currentDomain, search: document.getElementById('compSearch').value});
+  const tbl = document.getElementById('compsTable');
+  tbl.innerHTML = '<thead><tr><th>Name</th><th>Domain</th><th>ID</th></tr></thead><tbody>' +
+    (res.nodes||[]).map(n => `<tr><td>${escapeHtml(n.name||'')}</td><td>${escapeHtml(n.domain||'')}</td><td>${escapeHtml(n.id||'')}</td></tr>`).join('') + '</tbody>';
+}
+document.getElementById('compSearch').addEventListener('input', () => loadComputers());
+
+async function loadOUs() {
+  const res = await loadObjects('OU', {domain: currentDomain, search: document.getElementById('ouSearch').value});
+  const tbl = document.getElementById('ousTable');
+  tbl.innerHTML = '<thead><tr><th>Name</th><th>Domain</th><th>ID</th></tr></thead><tbody>' +
+    (res.nodes||[]).map(n => `<tr><td>${escapeHtml(n.name||'')}</td><td>${escapeHtml(n.domain||'')}</td><td>${escapeHtml(n.id||'')}</td></tr>`).join('') + '</tbody>';
+}
+document.getElementById('ouSearch').addEventListener('input', () => loadOUs());
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+}
+
+async function searchForPath(id, q, cb) {
+  if (!q || q.length < 2) { cb([]); return; }
+  const params = new URLSearchParams();
+  params.set('search', q);
+  params.set('limit', '20');
+  const r = await fetch('/api/v1/objects?' + params);
+  const j = await r.json();
+  cb(j.nodes || []);
+}
+
+let pathSrcSel = null, pathDstSel = null;
+document.getElementById('pathSrc').addEventListener('input', async e => {
+  const res = await (async () => { const p=new URLSearchParams(); p.set('search',e.target.value); p.set('limit','10'); const r=await fetch('/api/v1/objects?'+p); return r.json(); })();
+  const el = document.getElementById('pathSrcRes'); el.innerHTML='';
+  (res.nodes||[]).forEach(n => {
+    const d = document.createElement('div'); d.className='suggest-item'; d.textContent = (n.name||n.sam_account_name||n.id)+' ('+n.kind+')'; d.onclick=()=>{ document.getElementById('pathSrc').value=d.textContent; pathSrcSel=n.id; el.innerHTML=''; };
+    el.appendChild(d);
+  });
+});
+document.getElementById('pathDst').addEventListener('input', async e => {
+  const p=new URLSearchParams(); p.set('search',e.target.value); p.set('limit','10'); const r=await fetch('/api/v1/objects?'+p); const j=await r.json();
+  const el=document.getElementById('pathDstRes'); el.innerHTML='';
+  (j.nodes||[]).forEach(n => { const d=document.createElement('div'); d.className='suggest-item'; d.textContent=(n.name||n.sam_account_name||n.id)+' ('+n.kind+')'; d.onclick=()=>{ document.getElementById('pathDst').value=d.textContent; pathDstSel=n.id; el.innerHTML=''; }; el.appendChild(d); });
+});
+
+document.getElementById('pathSearch').addEventListener('click', async () => {
+  if (!pathSrcSel || !pathDstSel) return;
+  const body = {
+    source_id: pathSrcSel,
+    target_id: pathDstSel,
+    max_depth: parseInt(document.getElementById('pathDepth').value||'5'),
+    max_paths: parseInt(document.getElementById('pathMax').value||'10'),
+    direction: document.getElementById('pathDir').value
+  };
+  const r = await fetch('/api/v1/paths/shortest', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json();
+  const el = document.getElementById('pathResults'); el.innerHTML='';
+  (j.paths||[]).forEach((p,i) => {
+    const div = document.createElement('div'); div.className='path-item';
+    div.innerHTML = '<strong>Path ' + (i+1) + ' (len=' + p.length + ')</strong><br/>' +
+      (p.nodes||[]).map(n => n.name||n.id).join(' → ') + '<br/>' +
+      (p.relationships||[]).map(e => e.kind).join(' · ');
+    el.appendChild(div);
+  });
+});
+document.getElementById('pathClear').addEventListener('click', () => {
+  document.getElementById('pathSrc').value=''; document.getElementById('pathDst').value=''; document.getElementById('pathResults').innerHTML=''; pathSrcSel=null; pathDstSel=null;
+});
+
+loadDomains();
+setView('overview');
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', attachNav);
+} else {
+  attachNav();
+}
+function attachNav() {
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    b.removeEventListener('click', navClick);
+    b.addEventListener('click', navClick);
+  });
+}
+function navClick() {
+  setView(this.dataset.view);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.nav-btn').forEach(function(b) {
+    b.onclick = function() {
+      var view = this.getAttribute('data-view');
+      setView(view);
+      var active = document.querySelector('.nav-btn.active');
+      if (active) active.classList.remove('active');
+      this.classList.add('active');
+      try { loadDomains(); } catch(e){}
+      if (view === 'users') {
+        loadUsers();
+      } else if (view === 'groups') {
+        loadGroups();
+      } else if (view === 'computers') {
+        loadComputers();
+      } else if (view === 'ous') {
+        loadOUs();
+      }
+    };
+  });
+});

@@ -105,8 +105,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/graph", s.handleGraph)
 	mux.HandleFunc("GET /api/v1/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/v1/edges", s.handleEdges)
+	mux.HandleFunc("GET /api/v1/domains", s.handleDomains)
+	mux.HandleFunc("GET /api/v1/objects", s.handleObjects)
 	mux.HandleFunc("GET /api/v1/nodes/{id}", s.handleNode)
+	mux.HandleFunc("GET /api/v1/objects/{id}", s.handleObject)
+	mux.HandleFunc("GET /api/v1/objects/{id}/relationships", s.handleObjectRelationships)
 	mux.HandleFunc("GET /api/v1/nodes/{id}/neighbors", s.handleNeighbors)
+	mux.HandleFunc("GET /api/v1/paths/shortest", s.handlePathsShortest)
+	mux.HandleFunc("POST /api/v1/paths/shortest", s.handlePathsShortest)
 	mux.HandleFunc("GET /api/v1/abuse", s.handleAbuse)
 	mux.HandleFunc("GET /api/v1/abuse/supported", s.handleAbuseSupported)
 
@@ -467,4 +473,140 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any, max int64) error 
 		return errTrailingJSON
 	}
 	return nil
+}
+
+func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request) {
+	domains, err := s.store.Domains(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"domains": domains})
+}
+
+func (s *Server) handleObjects(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	domain := q.Get("domain")
+	kindStr := q.Get("type")
+	search := q.Get("search")
+	if search == "" {
+		search = q.Get("q")
+	}
+	limit, offset := pageParams(r)
+	var kind model.Kind
+	if kindStr != "" {
+		kind = model.Kind(strings.TrimSpace(kindStr))
+	}
+	nodes, total, err := s.store.SearchNodes(r.Context(), search, kind, domain, limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+		"nodes":  nodes,
+	})
+}
+
+func (s *Server) handleObject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, ok, err := s.store.GetNode(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "object not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *Server) handleObjectRelationships(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	out, err := s.store.Neighbors(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	in, err := s.store.Incoming(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"outgoing": out, "incoming": in})
+}
+
+type pathRequest struct {
+	SourceID                    string           `json:"source_id"`
+	TargetID                    string           `json:"target_id"`
+	MaxDepth                    int              `json:"max_depth"`
+	MaxPaths                    int              `json:"max_paths"`
+	Direction                   string           `json:"direction"`
+	IncludeNodeTypes            []model.Kind     `json:"include_node_types"`
+	ExcludeNodeTypes            []model.Kind     `json:"exclude_node_types"`
+	IncludeRelationshipTypes    []model.EdgeKind `json:"include_relationship_types"`
+	ExcludeRelationshipTypes    []model.EdgeKind `json:"exclude_relationship_types"`
+	RequiredIntermediateNodeIDs []string         `json:"required_intermediate_node_ids"`
+}
+
+func (s *Server) handlePathsShortest(w http.ResponseWriter, r *http.Request) {
+	var req pathRequest
+	if r.Method == http.MethodPost {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	} else {
+		q := r.URL.Query()
+		req.SourceID = q.Get("from")
+		req.TargetID = q.Get("to")
+		if md := q.Get("max_depth"); md != "" {
+			v, _ := strconv.Atoi(md)
+			req.MaxDepth = v
+		}
+		if mp := q.Get("max_paths"); mp != "" {
+			v, _ := strconv.Atoi(mp)
+			req.MaxPaths = v
+		}
+		req.Direction = q.Get("direction")
+	}
+
+	dir := graph.Outgoing
+	switch strings.ToLower(req.Direction) {
+	case "undirected":
+		dir = graph.Undirected
+	case "incoming":
+		dir = graph.Incoming
+	default:
+		dir = graph.Outgoing
+	}
+
+	greq := graph.ShortestPathRequest{
+		SourceID:                    req.SourceID,
+		TargetID:                    req.TargetID,
+		MaxDepth:                    req.MaxDepth,
+		MaxPaths:                    req.MaxPaths,
+		Direction:                   dir,
+		IncludeNodeTypes:            req.IncludeNodeTypes,
+		ExcludeNodeTypes:            req.ExcludeNodeTypes,
+		IncludeRelationshipTypes:    req.IncludeRelationshipTypes,
+		ExcludeRelationshipTypes:    req.ExcludeRelationshipTypes,
+		RequiredIntermediateNodeIDs: req.RequiredIntermediateNodeIDs,
+	}
+	if greq.MaxDepth <= 0 {
+		greq.MaxDepth = 5
+	}
+	if greq.MaxPaths <= 0 {
+		greq.MaxPaths = 10
+	}
+
+	res, err := s.store.ShortestPaths(r.Context(), greq)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }

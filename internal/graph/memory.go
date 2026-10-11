@@ -3,9 +3,14 @@ package graph
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/krazybeastx1/omenhound/pkg/model"
+)
+
+const (
+	defaultPageLimit = 1000
 )
 
 // Memory is an in-memory Store. It is safe for concurrent use and is intended
@@ -162,6 +167,69 @@ func (m *Memory) Stats(_ context.Context) (Stats, error) {
 	return Stats{Nodes: len(m.nodes), Edges: len(m.edges)}, nil
 }
 
+// SearchNodes implements Store.
+func (m *Memory) SearchNodes(_ context.Context, q string, kind model.Kind, domain string, limit, offset int) ([]model.Node, int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ql := strings.ToLower(q)
+	var out []model.Node
+	for _, n := range m.nodes {
+		if kind != "" && n.Kind != kind {
+			continue
+		}
+		if domain != "" && strings.ToLower(n.Domain) != strings.ToLower(domain) {
+			continue
+		}
+		if q == "" {
+			out = append(out, n)
+			continue
+		}
+		if strings.Contains(strings.ToLower(n.Name), ql) ||
+			strings.Contains(strings.ToLower(n.SAMAccountName), ql) ||
+			strings.Contains(strings.ToLower(n.ID), ql) ||
+			strings.Contains(strings.ToLower(n.DN), ql) {
+			out = append(out, n)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	total := len(out)
+	if limit <= 0 {
+		limit = defaultPageLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= total {
+		return []model.Node{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return out[offset:end], total, nil
+}
+
+// Domains implements Store.
+func (m *Memory) Domains(_ context.Context) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := make(map[string]struct{})
+	var out []string
+	for _, n := range m.nodes {
+		d := strings.TrimSpace(n.Domain)
+		if d == "" {
+			continue
+		}
+		if _, ok := seen[strings.ToLower(d)]; ok {
+			continue
+		}
+		seen[strings.ToLower(d)] = struct{}{}
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // Close implements Store.
 func (m *Memory) Close(context.Context) error { return nil }
 
@@ -178,3 +246,159 @@ func sortEdges(e []model.Edge) {
 }
 
 var _ Store = (*Memory)(nil)
+
+// ShortestPaths implements Store using BFS.
+func (m *Memory) ShortestPaths(_ context.Context, req ShortestPathRequest) (ShortestPathResult, error) {
+	if req.SourceID == "" || req.TargetID == "" {
+		return ShortestPathResult{}, nil
+	}
+	if req.MaxDepth <= 0 {
+		req.MaxDepth = 6
+	}
+	if req.MaxPaths <= 0 {
+		req.MaxPaths = 10
+	}
+
+	m.mu.RLock()
+	if _, ok1 := m.nodes[req.SourceID]; !ok1 {
+		m.mu.RUnlock()
+		return ShortestPathResult{}, nil
+	}
+	if _, ok2 := m.nodes[req.TargetID]; !ok2 {
+		m.mu.RUnlock()
+		return ShortestPathResult{}, nil
+	}
+	m.mu.RUnlock()
+
+	type state struct {
+		node  string
+		path  []string
+		edges []model.Edge
+		depth int
+	}
+	queue := []state{{node: req.SourceID, path: []string{req.SourceID}, edges: []model.Edge{}, depth: 0}}
+	visited := map[string]int{req.SourceID: 0}
+	var paths []Path
+
+	for i := 0; i < len(queue); i++ {
+		cur := queue[i]
+		if cur.depth >= req.MaxDepth {
+			continue
+		}
+		neighbors := m.out[cur.node]
+		if req.Direction == Incoming || req.Direction == Undirected {
+			for _, e := range m.in[cur.node] {
+				neighbors["rev"+e.Source+string(e.Kind)+e.Target] = e
+			}
+		}
+		for _, e := range neighbors {
+			edge := e
+			if edge.Source != cur.node && (req.Direction == Outgoing || req.Direction == Incoming) {
+				// for undirected we need to handle; but simpler: reconstruct
+			}
+			nxtNode := edge.Target
+			if edge.Target == cur.node {
+				nxtNode = edge.Source
+				edge2 := model.Edge{Source: edge.Target, Target: edge.Source, Kind: edge.Kind}
+				edge = edge2
+			}
+			if req.Direction == Incoming && edge.Source == cur.node && edge.Target != cur.node {
+				continue
+			}
+			// filter relationship types
+			if len(req.IncludeRelationshipTypes) > 0 {
+				ok := false
+				for _, k := range req.IncludeRelationshipTypes {
+					if edge.Kind == k {
+						ok = true
+						break
+					}
+				}
+				if !ok {
+					continue
+				}
+			}
+			if len(req.ExcludeRelationshipTypes) > 0 {
+				ex := false
+				for _, k := range req.ExcludeRelationshipTypes {
+					if edge.Kind == k {
+						ex = true
+						break
+					}
+				}
+				if ex {
+					continue
+				}
+			}
+			n, on := m.nodes[nxtNode]
+			if !on {
+				continue
+			}
+			if len(req.IncludeNodeTypes) > 0 {
+				ok := false
+				for _, k := range req.IncludeNodeTypes {
+					if n.Kind == k {
+						ok = true
+						break
+					}
+				}
+				if !ok {
+					continue
+				}
+			}
+			if len(req.ExcludeNodeTypes) > 0 {
+				ex := false
+				for _, k := range req.ExcludeNodeTypes {
+					if n.Kind == k {
+						ex = true
+						break
+					}
+				}
+				if ex {
+					continue
+				}
+			}
+			if nxtNode == req.TargetID {
+				pn := make([]model.Node, 0, len(cur.path)+1)
+				for _, pid := range append(cur.path, nxtNode) {
+					if nn, ok := m.nodes[pid]; ok {
+						pn = append(pn, nn)
+					}
+				}
+				pe := make([]model.Edge, 0, len(cur.edges)+1)
+				for _, ee := range cur.edges {
+					pe = append(pe, ee)
+				}
+				pe = append(pe, edge)
+				paths = append(paths, Path{Nodes: pn, Relationships: pe, Length: len(pe)})
+				if len(paths) >= req.MaxPaths {
+					break
+				}
+				continue
+			}
+			if prev, seen := visited[nxtNode]; seen && prev <= cur.depth+1 {
+				continue
+			}
+			visited[nxtNode] = cur.depth + 1
+			newPath := append(append([]string(nil), cur.path...), nxtNode)
+			newEdges := append(append([]model.Edge(nil), cur.edges...), edge)
+			queue = append(queue, state{node: nxtNode, path: newPath, edges: newEdges, depth: cur.depth + 1})
+		}
+		if len(paths) >= req.MaxPaths {
+			break
+		}
+	}
+
+	trunc := len(paths) >= req.MaxPaths
+	return ShortestPathResult{Paths: paths, Truncated: trunc}, nil
+}
+
+func (m *Memory) getNodesFromPath(pids []string) []model.Node {
+	out := make([]model.Node, 0, len(pids))
+	for _, id := range pids {
+		if n, ok := m.nodes[id]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
