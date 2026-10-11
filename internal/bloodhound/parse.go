@@ -302,10 +302,41 @@ func (b *builder) addTrust(domainID string, t bhTrust) {
 	if _, ok := b.hints[other]; !ok {
 		b.hints[other] = model.Node{ID: other, Kind: model.KindDomain, Name: firstNonEmpty(name, other)}
 	}
-	if t.TrustDirection&1 != 0 {
+	var tdir int
+	switch v := t.TrustDirection.(type) {
+	case float64:
+		tdir = int(v)
+	case int:
+		tdir = v
+	case int64:
+		tdir = int(v)
+	case string:
+		s := strings.ToLower(strings.TrimSpace(v))
+		switch s {
+		case "bidirectional", "both", "2":
+			tdir = 2
+		case "inbound", "incoming", "1":
+			tdir = 1
+		case "outbound", "outgoing", "3":
+			tdir = 3
+		default:
+			n := 0
+			for i := 0; i < len(s); i++ {
+				if s[i] >= '0' && s[i] <= '9' {
+					n = n*10 + int(s[i]-'0')
+				} else {
+					break
+				}
+			}
+			tdir = n
+		}
+	default:
+		tdir = 0
+	}
+	if tdir&1 != 0 {
 		b.addEdge(domainID, other, model.EdgeTrustedBy, nil)
 	}
-	if t.TrustDirection&2 != 0 {
+	if tdir&2 != 0 {
 		b.addEdge(other, domainID, model.EdgeTrustedBy, nil)
 	}
 }
