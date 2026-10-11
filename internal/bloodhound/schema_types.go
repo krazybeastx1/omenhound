@@ -1,6 +1,5 @@
 package bloodhound
 
-
 // bhFile mirrors the BloodHound CE JSON wrapper:
 //
 //	{"data": [ ...objects... ], "meta": {"type": "users", "count": N, "version": 5}}
@@ -33,13 +32,13 @@ type bhEntry struct {
 
 	PrimaryGroupSID string `json:"PrimaryGroupSID"`
 
-	LocalAdmins        *bhCollected `json:"LocalAdmins"`
-	PSRemoteUsers      *bhCollected `json:"PSRemoteUsers"`
-	RemoteDesktopUsers *bhCollected `json:"RemoteDesktopUsers"`
-	DcomUsers          *bhCollected `json:"DcomUsers"`
-	Sessions           *bhCollected `json:"Sessions"`
-	PrivilegedSessions *bhCollected `json:"PrivilegedSessions"`
-	RegistrySessions   *bhCollected `json:"RegistrySessions"`
+	LocalAdmins        *bhCollected   `json:"LocalAdmins"`
+	PSRemoteUsers      *bhCollected   `json:"PSRemoteUsers"`
+	RemoteDesktopUsers *bhCollected   `json:"RemoteDesktopUsers"`
+	DcomUsers          *bhCollected   `json:"DcomUsers"`
+	Sessions           *bhCollected   `json:"Sessions"`
+	PrivilegedSessions *bhCollected   `json:"PrivilegedSessions"`
+	RegistrySessions   *bhCollected   `json:"RegistrySessions"`
 	LocalGroups        []bhLocalGroup `json:"LocalGroups"`
 
 	Trusts []bhTrust `json:"Trusts"`
