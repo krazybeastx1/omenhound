@@ -48,7 +48,22 @@ type bhEntry struct {
 	PrivilegedSessions *bhCollected `json:"PrivilegedSessions"`
 	RegistrySessions   *bhCollected `json:"RegistrySessions"`
 
+	// LocalGroups is BloodHound CE v5 (and bloodhound-ce-python) shape for the
+	// same information the legacy LocalAdmins/… fields carry: one entry per
+	// well-known local alias on the computer.
+	LocalGroups []bhLocalGroup `json:"LocalGroups"`
+
 	Trusts []bhTrust `json:"Trusts"`
+}
+
+// bhLocalGroup mirrors a BloodHound CE v5 computer "LocalGroups" entry.
+// ObjectIdentifier is "<computerSID>-<RID>"; Name is "GROUPNAME@HOST".
+type bhLocalGroup struct {
+	ObjectIdentifier string     `json:"ObjectIdentifier"`
+	Name             string     `json:"Name"`
+	Collected        bool       `json:"Collected"`
+	FailureReason    string     `json:"FailureReason"`
+	Results          []bhResult `json:"Results"`
 }
 
 type bhAce struct {

@@ -201,6 +201,10 @@ func (b *builder) addEntry(kind model.Kind, e *bhEntry) {
 	b.collected(e.RemoteDesktopUsers, id, model.EdgeCanRDP)
 	b.collected(e.DcomUsers, id, model.EdgeExecuteDCOM)
 
+	// BloodHound CE v5 carries the same data as LocalGroups (one entry per
+	// well-known local alias). Accept both so files from either collector load.
+	b.localGroups(e.LocalGroups, id)
+
 	// Sessions (user -> computer).
 	b.sessions(e.Sessions, id)
 	b.sessions(e.PrivilegedSessions, id)
@@ -223,6 +227,46 @@ func (b *builder) collected(c *bhCollected, computer string, kind model.EdgeKind
 		}
 		b.addEdge(oid, computer, kind, nil)
 		b.guessKind(oid, r.ObjectType)
+	}
+}
+
+// localGroupEdge maps a well-known local-alias RID to the edge its membership
+// implies. BloodHound CE v5 stores local groups as ADLocalGroup nodes with
+// MemberOfLocalGroup/LocalToComputer edges and analyses them into direct
+// member -> computer edges; OmenHound has no analysis phase and no ADLocalGroup
+// kind, so it emits the analysed form directly — the same edges the SMB
+// collector produces.
+var localGroupEdge = map[string]model.EdgeKind{
+	"544": model.EdgeAdminTo,
+	"555": model.EdgeCanRDP,
+	"562": model.EdgeExecuteDCOM,
+	"580": model.EdgeCanPSRemote,
+}
+
+// localGroups turns CE v5 "LocalGroups" entries into member -> computer edges.
+// Groups that were not collected, or whose RID is not one of the four OmenHound
+// models, are skipped.
+func (b *builder) localGroups(groups []bhLocalGroup, computer string) {
+	for _, lg := range groups {
+		if !lg.Collected {
+			continue
+		}
+		rid := strings.TrimSpace(lg.ObjectIdentifier)
+		if i := strings.LastIndexByte(rid, '-'); i >= 0 {
+			rid = rid[i+1:]
+		}
+		kind, ok := localGroupEdge[rid]
+		if !ok {
+			continue
+		}
+		for _, r := range lg.Results {
+			oid := firstNonEmpty(strings.TrimSpace(r.ObjectIdentifier), strings.TrimSpace(r.UserSID))
+			if oid == "" {
+				continue
+			}
+			b.addEdge(oid, computer, kind, nil)
+			b.guessKind(oid, r.ObjectType)
+		}
 	}
 }
 

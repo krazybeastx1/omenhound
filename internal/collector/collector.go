@@ -12,10 +12,6 @@ import (
 	"github.com/krazybeastx1/omenhound/pkg/model"
 )
 
-// ErrNotImplemented is returned by collection paths that are planned but not yet
-// available (e.g. SMB session enumeration).
-var ErrNotImplemented = errors.New("collector: not implemented yet")
-
 // Options configures a collection run.
 type Options struct {
 	// Domain is the NetBIOS or DNS domain (e.g. "corp.local").
@@ -41,8 +37,8 @@ type Options struct {
 	Hashes []byte
 	// Timeout bounds the whole run.
 	Timeout time.Duration
-	// IncludeSessions requests session collection (requires SMB; ldap-only
-	// collectors ignore it with a warning).
+	// IncludeSessions is a legacy shorthand for the "session" collection method;
+	// it is equivalent to adding "session" to Methods.
 	IncludeSessions bool
 	// AllowPlaintextLDAP permits binding over unencrypted LDAP. This is refused
 	// by default because it exposes credentials on the wire.

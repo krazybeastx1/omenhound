@@ -5,7 +5,8 @@
 | Use case | You need |
 |---|---|
 | Building / sample mode / import | **Go 1.26+**, nothing else |
-| Collecting from AD | Network access to a DC on **636/tcp (LDAPS)** and a bind account |
+| Collecting from AD (LDAP) | Network access to a DC on **636/tcp (LDAPS)** and a bind account |
+| Collecting sessions / local groups (SMB) | Network access to the target computers on **445/tcp** and a bind account with local admin |
 | Neo4j backend | A reachable **Neo4j 5.x** (`bolt://host:7687`) |
 
 Everything is dependency-free at runtime: the web UI is embedded in the binary, there
@@ -46,8 +47,9 @@ the web UI, and the dynamic abuse renderer.
 
 ## 2. Collect from a real domain (LDAP/LDAPS)
 
-OmenHound this pass supports **LDAP simple bind over LDAPS**. Plaintext LDAP is refused
-unless you explicitly opt in with `--allow-plaintext-ldap` (lab only).
+OmenHound supports **LDAP simple bind over LDAPS**, **NTLM**, and **pass-the-hash**.
+Plaintext LDAP is refused unless you explicitly opt in with `--allow-plaintext-ldap`
+(lab only).
 
 ```bash
 export OMENHOUND_PASSWORD='...'            # keep secrets out of argv/history
@@ -96,29 +98,50 @@ bind is refused unless you add `--allow-plaintext-ldap`):
   -c dc --out corp.json
 ```
 
-### Collection methods (honest partial support)
+### Collection methods
 
-OmenHound implements the **`group`**, **`objectprops`**, **`acl`**, **`trusts`** and
-**`container`** methods: users, groups, computers and membership; their properties;
-object security descriptors → ACL edges; `trustedDomain` objects → `TrustedBy` edges;
-and OUs/GPOs/containers → `Contains` + `GPLink` edges. `-c dc` / `-c dconly` expands to
-`group,trusts,objectprops,acl,container`, so it skips nothing. Any *other* method you
-request is reported explicitly — never silently dropped:
+Every BloodHound.py method is implemented: **`group`**, **`objectprops`**,
+**`acl`**, **`trusts`**, **`container`** (over LDAP) and **`session`**,
+**`localadmin`**, **`rdp`**, **`dcom`**, **`psremote`**, **`loggedon`** (over
+SMB/RPC). `-c dc` / `-c dconly` expands to `group,trusts,objectprops,acl,container`;
+`-c default` expands to `group,localadmin,session,trusts`; `-c all` runs everything.
+An *unknown* method name is reported explicitly — never silently dropped.
 
+The LDAP passes collect users, groups, computers and membership, their properties,
+object security descriptors → ACL edges, `trustedDomain` objects → `TrustedBy`
+edges, and OUs/GPOs/containers → `Contains` + `GPLink` edges. Each pass is
+self-sufficient: `-c acl` emits ACL edges and creates the `OU`/`GPO`/`Container`
+nodes it needs, and `-c container` builds the containment tree without needing
+`acl`.
+
+The SMB/RPC passes resolve what LDAP cannot see — logged-on sessions
+(`HasSession`), local Administrators (`AdminTo`), and the remote-access groups
+(`CanRDP`, `ExecuteDCOM`, `CanPSRemote`) — by querying every collected computer
+over an authenticated SMB session:
+
+```bash
+# full remote-facts collection, LDAP + SMB
+./bin/omenhound collect --collector ldap -d corp.local -dc dc01.corp.local \
+  -u 'CORP\svc' --password-stdin --use-ldaps \
+  -c all --timeout 30m --zip -op corp_ --out corp_bloodhound.zip
+
+# just sessions + local admins
+./bin/omenhound collect --collector ldap -d corp.local -dc dc01.corp.local \
+  -u 'CORP\svc' --password-stdin --use-ldaps \
+  -c session,localadmin --timeout 10m --out corp.json
 ```
-collect: WARNING: collection method "session" is not implemented — skipped
-collect: WARNING: collection method "localadmin" is not implemented — skipped
-```
 
-If you ask for **only** unimplemented methods (e.g. `-c session`), the collector
-**refuses to run** rather than pretending it collected something.
+SMB computers are queried **one at a time**, so `--timeout` is the overall budget —
+raise it for a large domain. Pass-the-hash works over SMB as well as LDAP
+(`--hashes NT`). A computer is only dialled if it has a `dNSHostName`; if the SMB
+credentials are missing, or a host is unreachable, the run continues and reports it
+in `Meta.Warnings`.
 
-Each pass is self-sufficient: `-c acl` emits ACL edges and creates the
-`OU`/`GPO`/`Container` nodes it needs, and `-c container` builds the containment tree
-without needing `acl`. One caveat on validation — the parsers and mappings are tested
-against **impacket**-generated descriptors and hand-built fixtures, but the live LDAP
-path has not yet been exercised against a real domain controller, so treat first
-contact with a DC as unverified.
+One caveat on validation — the parsers and mappings are tested against
+**impacket**-generated descriptors and hand-built fixtures, and the SMB pass's
+filtering/resolution are unit-tested, but **the live LDAP and SMB/RPC paths have
+not yet been exercised against a real domain controller or host**, so treat first
+contact as unverified.
 
 See **[Coming from BloodHound.py](Coming-from-BloodHound-py)** for the full method table.
 
@@ -182,9 +205,9 @@ your own Cypher) at the same database.
 | Symptom | Cause / fix |
 |---|---|
 | `ldap: refusing plaintext LDAP` | Add `--ldaps`. Plaintext bind leaks credentials; only override with `--allow-plaintext-ldap` on a lab. |
-| `collector: unknown collection method "x"` | Typo, or a method OmenHound doesn't know. Known names are listed in the error. |
-| `ldap: none of the requested collection methods are implemented` | You asked for only unimplemented methods. Use `group`/`objectprops`/`acl`/`trusts`/`container`/`all`/`dc`. |
+| `collector: unknown collection method "x"` | Typo. Known names are listed in the error. |
 | `dns: could not discover a DC` | SRV lookup failed; pass `-dc <host>` instead of `-ns`, or check DNS. |
+| SMB methods collected nothing | Check the `collect: WARNING:` lines — usually missing credentials, hosts with no `dNSHostName`, an unreachable host, or a `--timeout` that ran out. Raise `--timeout` for a large domain. |
 | `import: no JSON files inside …zip` | Wrong archive. Point at the `--zip` output from BloodHound.py/CE. |
 | `write API is disabled` | Start `serve` with `--api-token`. |
 | `unauthorized` on a write | Missing/incorrect `Authorization: Bearer <token>`. |

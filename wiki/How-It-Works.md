@@ -16,7 +16,7 @@ OmenHound is a small set of independent Go packages wired together by one binary
 | Package | Responsibility |
 |---|---|
 | `pkg/model` | Node/edge vocabulary, `Graph`, `Meta`, SID-keyed identity, O(1) dedup index. |
-| `internal/collector` | `Collector` interface; `sample` and `ldap` collectors; method planning; DC SRV discovery. |
+| `internal/collector` | `Collector` interface; `sample` and `ldap` collectors (LDAP + SMB/RPC passes); method planning; DC SRV discovery. |
 | `internal/bloodhound` | BloodHound CE JSON/`--zip` **import** and **export**. |
 | `internal/graph` | `Store` interface; `memory` (tests/demos) and `neo4j` (production) backends. |
 | `internal/ingest` | Strict decode, validation (size, referential integrity, vocabulary), write. |
@@ -82,8 +82,10 @@ The current implementation is the result of a dedicated hardening + optimization
   token-bucket limiter plus a separate write-method limiter, pagination on list
   endpoints (default 1000, max 10000), and `clientIP` that deliberately ignores
   `X-Forwarded-For`.
-- **Collector bounds** — dial timeouts, paged LDAP searches (500/page, 500k entries cap,
-  60s server-side time limit), and a plaintext-LDAP refusal.
+- **Collector bounds** — dial timeouts (SMB gated by a TCP probe, 10 s dial / 30 s
+  per-host RPC), paged LDAP searches (500/page, 500k entries cap, 60s server-side time
+  limit), and a plaintext-LDAP refusal. The SMB pass runs computers sequentially (an
+  OPSEC choice) under the run's `--timeout`.
 - **Credential hygiene** — secrets are `[]byte`, length-capped, explicitly zeroed with
   `runtime.KeepAlive`, and swept by a background janitor; the audit logger redacts
   sensitive field names before writing.

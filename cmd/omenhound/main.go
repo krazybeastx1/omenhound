@@ -163,6 +163,10 @@ func cmdCollect(args []string) int {
 	for _, m := range plan.Skipped {
 		log.Printf("collect: WARNING: collection method %q is not implemented — skipped", m)
 	}
+	if needsSMB(plan) && strings.EqualFold(*collectorName, "ldap") && *timeout < 5*time.Minute {
+		log.Printf("collect: note: SMB methods query every computer one at a time; "+
+			"raise --timeout (currently %s) for a large domain", *timeout)
+	}
 
 	// Authentication selection. BloodHound.py's rule applies: supplying hashes
 	// selects NTLM, and -k/--kerberos is just --auth-method kerberos.
@@ -263,6 +267,22 @@ func pick(primary, alias string) string {
 		return primary
 	}
 	return alias
+}
+
+// smbMethods are the collection methods that require an SMB/RPC pass over each
+// computer, which is far slower than the LDAP passes.
+var smbMethods = map[string]bool{
+	"session": true, "localadmin": true, "rdp": true,
+	"dcom": true, "psremote": true, "loggedon": true,
+}
+
+func needsSMB(plan collector.MethodPlan) bool {
+	for _, m := range plan.Implemented {
+		if smbMethods[m] {
+			return true
+		}
+	}
+	return false
 }
 
 func flagSet(fs *flag.FlagSet, name string) bool {

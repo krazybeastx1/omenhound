@@ -10,9 +10,9 @@ import (
 )
 
 // MethodPlan records a resolved BloodHound.py-style collection-method request.
-// OmenHound implements a subset of methods today; everything requested but not
-// implemented is listed in Skipped so the operator gets an explicit, honest
-// "not implemented — skipped" report rather than a silent partial collection.
+// Every recognised method is implemented today, so Skipped is normally empty; it
+// is retained for methods that are recognised but not yet implemented, so they
+// can be reported explicitly rather than silently ignored.
 type MethodPlan struct {
 	Requested   []string
 	Implemented []string
@@ -25,10 +25,12 @@ var bloodhoundMethods = []string{
 	"container", "dcom", "rdp", "psremote", "loggedon",
 }
 
-// implementedMethodList is the ordered list of methods OmenHound's LDAP
-// collector can perform. It is exported to operators in error/warning text, so
-// it has a single source of truth here.
-var implementedMethodList = []string{"group", "objectprops", "acl", "trusts", "container"}
+// implementedMethodList is the ordered list of methods OmenHound can perform.
+// All BloodHound.py methods are implemented: some over LDAP (group,
+// objectprops, acl, trusts, container) and some over SMB/RPC (session,
+// localadmin, rdp, dcom, psremote, loggedon). It is exported to operators in
+// error/warning text, so it has a single source of truth here.
+var implementedMethodList = append([]string(nil), bloodhoundMethods...)
 
 // implementedMethods is the lookup form of implementedMethodList.
 var implementedMethods = func() map[string]bool {

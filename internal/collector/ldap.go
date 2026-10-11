@@ -15,8 +15,9 @@ import (
 
 // LDAPCollector enumerates users, groups, computers, their group membership,
 // OUs/GPOs/containers, domain trusts, and (with -c acl) object security
-// descriptors over LDAP/LDAPS. Session and local-admin collection require SMB and
-// are implemented by the SMB collector, not here (see docs/ARCHITECTURE.md).
+// descriptors over LDAP/LDAPS. When an SMB method (session, localadmin, rdp,
+// dcom, psremote, loggedon) is requested it also drives the SMB/RPC pass over the
+// collected computers (see smb_collect.go and docs/ARCHITECTURE.md).
 type LDAPCollector struct{}
 
 // Name implements Collector.
@@ -63,9 +64,6 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 			g.Meta.Warnings = append(g.Meta.Warnings, fmt.Sprintf("collection method %q is not implemented — skipped", m))
 		}
 	}
-	if o.IncludeSessions {
-		g.Meta.Warnings = append(g.Meta.Warnings, "session collection requires SMB and is not implemented by the LDAP collector — skipped")
-	}
 	baseDN := o.BaseDN
 	if baseDN == "" {
 		baseDN = DomainToDN(o.Domain)
@@ -106,16 +104,29 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 		return nil, err
 	}
 
-	// Computers.
+	// Computers. dNSHostName is the address the SMB collector dials and the key
+	// BloodHound.py resolves session sources against, so it is collected here
+	// even when no SMB method is requested.
 	if err := eachEntry(conn, baseDN, "(objectClass=computer)",
-		[]string{"sAMAccountName", "objectSid", "distinguishedName", "name", "memberOf", "operatingSystem"},
+		[]string{"sAMAccountName", "objectSid", "distinguishedName", "name", "memberOf", "operatingSystem", "dNSHostName", "primaryGroupID"},
 		func(e *ldap.Entry) {
 			id := sidOf(e)
 			if id == "" {
 				return
 			}
+			props := map[string]string{"os": e.GetAttributeValue("operatingSystem")}
+			if hn := e.GetAttributeValue("dNSHostName"); hn != "" {
+				props["dnshostname"] = strings.ToLower(hn)
+			}
+			// primaryGroupID 516 is "Domain Controllers". The SMB pass uses it
+			// to skip local-group enumeration on DCs, mirroring BloodHound.py
+			// (primarygroup.endswith('-516')), where a DC's "local" groups are
+			// the domain's builtin groups.
+			if pg := e.GetAttributeValue("primaryGroupID"); pg != "" {
+				props["primarygroupid"] = pg
+			}
 			g.AddNode(model.Node{ID: id, Kind: model.KindComputer, Name: e.GetAttributeValue("name"), SAMAccountName: e.GetAttributeValue("sAMAccountName"), Domain: o.Domain, DN: e.DN,
-				Props: map[string]string{"os": e.GetAttributeValue("operatingSystem")}})
+				Props: props})
 			dnIndex[e.DN] = id
 			memberOf[id] = e.GetAttributeValues("memberOf")
 		}); err != nil {
@@ -176,6 +187,16 @@ func (LDAPCollector) Collect(ctx context.Context, o Options) (*model.Graph, erro
 	// creates any node (OU/GPO/container) the base passes did not.
 	if methodRequested(o.Methods, "acl") {
 		if err := collectACL(conn, o, g, dnIndex, baseDN); err != nil {
+			return nil, err
+		}
+	}
+
+	// SMB/RPC collection (`-c session`, localadmin, rdp, dcom, psremote,
+	// loggedon). It runs over the computers collected above and needs the SMB
+	// credentials from the bind, not the LDAP connection, so it happens after
+	// every LDAP pass has finished building the node graph it resolves against.
+	if smbAnyRequested(o) {
+		if err := collectSMB(ctx, g, o); err != nil {
 			return nil, err
 		}
 	}

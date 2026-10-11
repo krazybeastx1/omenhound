@@ -12,15 +12,16 @@ a UI that lets an operator explore paths and render abuse commands for the AD
 edges along those paths. Four first-class components:
 
 1. **Collector** (`internal/collector`) — a static Go binary, the SharpHound
-   equivalent. Speaks LDAP (`go-ldap`) and SMB (`go-smb2`); RPC/DCOM is planned.
+   equivalent. Speaks LDAP (`go-ldap`) and SMB2/DCE-RPC (`jfjallid/go-smb`).
    Emits a `model.Graph`. `methods.go` plans BloodHound.py-compatible collection
    methods (`-c …`) and performs DC SRV discovery; unimplemented methods are
    reported as explicit warnings and never silently dropped.
 2. **BloodHound interop** (`internal/bloodhound`) — imports BloodHound CE v5 JSON
    and `bloodhound-ce-python --zip` archives into `model.Graph` (SIDs/GUIDs kept
-   verbatim, CE edge directions, unmappable ACE rights counted), and exports an
-   OmenHound graph as a native CE v5 archive (`--zip`). Import → export → import
-   is lossless on the test fixture.
+   verbatim, CE edge directions, unmappable ACE rights counted). Both the legacy
+   local-group layout (`LocalAdmins`/`PSRemoteUsers`/…) and CE v5 `LocalGroups`
+   are accepted. Exports an OmenHound graph as a native CE v5 archive (`--zip`).
+   Import → export → import is lossless on the test fixture.
 3. **Graph backend** (`internal/graph`) — a `Store` interface with in-memory
    (`memory.go`) and Neo4j (`neo4j.go`) implementations; the schema mirrors
    BloodHound CE so CE queries keep working.
@@ -151,8 +152,9 @@ type Edge struct {
 
 Edges are **directed Source -> Target**. `Graph.AddEdge` de-duplicates on
 `(Source, Target, Kind)`, making ingestion idempotent: replaying a graph is a
-no-op. `Props` carries `inherited`, `isaclprotected`, `lastseen`, and ACE
-rights/inheritance details.
+no-op. `Props` carries ACE rights/inheritance details (`inherited`,
+`isaclprotected`, `enforced`, …). `lastseen` is reserved for the incremental-merge
+roadmap item and is not emitted by collection today.
 
 ### 3.5 Graph, Meta, and the wire format
 
@@ -216,10 +218,11 @@ type Collector interface {
 }
 ```
 
-`Options` carries connection + scope: `Domain`, `DomainController`, `BaseDN`,
-`Username`, `Password`/`Hash` (from `internal/creds`, never logged), `TLS`,
-`Method` (LDAP/SMB/RPC/ALL), `Threads`, `Throttle`, `Full`, and category toggles
-(`Sessions`, `ACLs`, `GPOs`, `Trusts`).
+`Options` carries connection + scope: `Domain`, `Server`, `BaseDN`, `UseLDAPS`,
+`InsecureSkipVerify`, `Username`, `Password`/`Hashes` (from `internal/creds`, never
+logged), `AuthMethod` (simple/NTLM/kerberos), `Timeout`, `AllowPlaintextLDAP`, and the
+resolved BloodHound.py-style method plan `Methods`. The SMB/RPC passes reuse the same
+`Username`/`Password`/`Hashes`, so pass-the-hash authenticates both LDAP and SMB.
 
 ```go
 // internal/graph
@@ -337,21 +340,62 @@ Primary collector, built on `go-ldap`:
 7. **Membership edges.** `primaryGroupID` is not in `member`, so a `MemberOf`
    edge is synthesized from `primaryGroupID` + domain SID.
 8. **Materialize** a `model.Graph` with `Meta.Collector = "ldap"`.
+9. **SMB/RPC collection** (`-c session,localadmin,rdp,dcom,psremote,loggedon`;
+   `smb.go`, `smb_collect.go`). Runs over the computers collected in step 3,
+   after every LDAP pass, because it needs the finished graph to resolve the
+   names and SIDs the RPC calls return. See §4.3.
 
-### 4.3 SMB collection (`smb.go`)
+### 4.3 SMB collection (`smb.go`, `smb_collect.go`)
 
-`go-smb2`, resolving facts LDAP cannot see:
+`github.com/jfjallid/go-smb` — an authenticated SMB2 session with DCE/RPC over
+named pipes — resolving facts LDAP cannot see. Every method is driven from one
+SMB session per computer, one computer at a time:
 
-- **Sessions (`HasSession`).** Enumerate logged-on sessions →
-  `User -HasSession-> Computer`; volatile, stamped `Props["lastseen"]`, expiry
-  candidate (§5.4).
-- **Local groups (`AdminTo`).** Read local Administrators membership to derive
-  `User/Group -AdminTo-> Computer` where `memberOf` omits local privilege.
-- **Remote access.** SMB reachability alone implies neither `AdminTo` nor
-  `CanPSRemote` (WinRM) nor `ExecuteDCOM` (DCOM); each needs its own probe.
+| Method | RPC call | Edge |
+|---|---|---|
+| `session` | srvsvc `NetrSessionEnum` level 10 | `User -HasSession-> Computer` (the session's *source* host) |
+| `loggedon` | wkssvc `NetrWkstaUserEnum` level 1 | `User -HasSession-> Computer` (the queried host) |
+| `localadmin` | samr alias 544 members | `Principal -AdminTo-> Computer` |
+| `rdp` | samr alias 555 members | `Principal -CanRDP-> Computer` |
+| `dcom` | samr alias 562 members | `Principal -ExecuteDCOM-> Computer` |
+| `psremote` | samr alias 580 members | `Principal -CanPSRemote-> Computer` |
 
-SMB collection is heavier and noisier than LDAP, so it is gated behind
-`Options.Sessions` / `Options.Method` and off in the default profile.
+Result handling mirrors BloodHound.py:
+
+- **Filtering.** Session entries drop the operator's own session, empty users,
+  machine accounts (`user$`), and loopback sources. Local-group members below
+  the host's own local SAM SID are dropped (local accounts are not edges). Local
+  groups are **skipped on domain controllers** (computer `primaryGroupID` 516) —
+  a DC's "local" groups are the domain's builtin groups, already collected over
+  LDAP; this mirrors BloodHound.py's `primarygroup.endswith('-516')` check.
+- **Resolution.** A session's account name is resolved through a SAM-name index
+  built from the collected users/computers; its source address through reverse
+  DNS (PTR) then the `dNSHostname`/short-name index. Members not already in the
+  graph are named by the target through lsarpc `LsarLookupSids2`, one SID per
+  call so an unmapped SID cannot shift the mapping of the ones after it. A SID
+  the target will not name is dropped and counted — never invented.
+- **Referential closure.** A member that only the target could name becomes a
+  node (kind from `SID_NAME_USE`, `Props["lsaresolved"]="true"`); otherwise no
+  node is created.
+
+Timing and cost: a TCP probe gates the SMB negotiation (dead hosts are cheap),
+the dial is bounded at 10 s and all RPC work against one host at 30 s, and the
+run's `--timeout` is the overall budget. Computers are queried **sequentially**
+(one at a time); there is no worker pool, so `--timeout` must be raised for a
+large domain.
+
+*Validation status.* The filtering, name/SID resolution, kind mapping and pass
+wiring are unit-tested (`smb_test.go`). The **live SMB/RPC path is code-only** —
+no SMB-capable host (let alone an AD lab) was available, so the SMB handshake,
+the srvsvc/samr/wkssvc/lsarpc calls and the pipe I/O have not been exercised
+end-to-end.
+
+Known divergences from BloodHound.py: no NetBIOS session service (port 139)
+fallback (the library speaks only direct SMB-over-TCP); no unauthenticated NTLM
+hostname lookup when a session source has no PTR record; `loggedon` does not
+also read registry (`winreg`) logon sessions; and reverse-DNS-less session
+sources are dropped rather than guessed. Each is reported as a warning.
+
 
 ### 4.4 Sample collector (`sample.go`)
 
@@ -600,7 +644,7 @@ omenhound/
 ├── cmd/omenhound/            # main; subcommands (collect|import|serve|export|version)
 ├── internal/
 │   ├── collector/            # Collector interface + ldap.go, ldap_acl.go, ldap_container.go,
-│   │                         # ldap_trusts.go, auth.go, smb.go, sample.go, methods.go
+│   │                         # ldap_trusts.go, auth.go, smb.go, smb_collect.go, sample.go, methods.go
 │   ├── bloodhound/           # BloodHound CE JSON/zip import + export
 │   ├── graph/                # Store interface + memory.go, neo4j.go
 │   ├── ingest/               # pipeline: strict decode, validate + merge
@@ -640,8 +684,8 @@ keeping the public API surface to exactly one package.
   membership, paging, primary-group synthesis), `ldap_acl.go` + `adacl.go` +
   `security_descriptor.go` (ACL edges — **done**), `ldap_container.go`
   (OU/GPO/container + `Contains`/`GPLink` — **done**), `ldap_trusts.go`
-  (`TrustedBy` — **done**), and `smb.go` (sessions, local admin, remote-access
-  edges, TTL/expiry wiring).
+  (`TrustedBy` — **done**), and `smb.go` + `smb_collect.go` (sessions,
+  local admin, remote-access edges — **done**, code-only/unvalidated).
 - **Phase 5 — Abuse renderer.** `internal/abuse` templates + OPSEC, wired to
   `/api/v1/abuse`.
 - **Phase 6 — UI.** Customize CE templates to the dynamic OmenHound API; keep
@@ -675,8 +719,8 @@ zero-dependency demo; `go test ./...` must pass with only the memory store.
 
 **Roadmap themes:**
 
-- **RPC/DCOM collection** (`ExecuteDCOM`, richer remote-access edges) with native
-  Go RPC over SMB, avoiding Python/Impacket on the collector host.
+- **Delegation collection** (`AllowedToDelegate`, `AllowedToAct`) natively, rather
+  than relying on import.
 - **Streaming for large domains.** NDJSON archive transport with the same
   `model.Graph` semantics, plus resumable incremental pushes.
 - **Entra ID / hybrid.** New node kinds (`AZTenant`, `AZUser`, `AZGroup`,

@@ -27,13 +27,24 @@ every gap is reported rather than faked. This page is the current boundary.
   between `Domain` nodes in BloodHound's direction, with trust type, transitivity and
   SID-filtering carried on the edge. `-c dc` / `-c dconly` now expands to fully
   implemented methods. *Status:* parsing/mapping unit-tested; live path **code-only**.
+- **SMB/RPC collection** (`-c session,localadmin,rdp,dcom,psremote,loggedon`) — one
+  authenticated SMB session per computer drives the same DCE/RPC calls BloodHound.py
+  uses: srvsvc sessions and wkssvc logged-on users → `HasSession`; samr local aliases
+  544/555/562/580 → `AdminTo`, `CanRDP`, `ExecuteDCOM`, `CanPSRemote`. BloodHound.py's
+  filtering (self session, machine accounts, loopback, local SAM SIDs) and resolution
+  (SAM-name index, reverse DNS, lsarpc `LsarLookupSids2` one SID per call) are
+  reproduced. Computers are queried sequentially; `--hashes` works over SMB too.
+  *Status:* filtering/resolution/wiring are unit-tested; the live SMB/RPC path is
+  **code-only** (no SMB host available). *Divergences:* no port-139 fallback, no
+  unauthenticated hostname lookup, `loggedon` is wkssvc-only — all reported as warnings.
 - **Auth** — LDAP **simple bind** by default, **NTLM bind** (`--auth-method ntlm`) and
-  **pass-the-hash** (`--hashes NT|LM:NT`) over LDAPS, using go-ldap's NTLMSSP bind
-  (no extra dependency). `--hashes` implies NTLM; only the NT half is used. Cleartext
-  NTLM is refused unless `--allow-plaintext-ldap`. Kerberos (`-k`) is accepted and
-  **refuses to run** with a clear message. *Status:* hash parsing, principal splitting,
-  method resolution and every refusal are unit-tested; the NTLMSSP handshake itself is
-  **code-only** (no AD lab available).
+  **pass-the-hash** (`--hashes NT|LM:NT`) over LDAPS **and SMB**, using go-ldap's
+  NTLMSSP bind for LDAP and the SMB library's NTLM initiator (raw NT hash) for SMB.
+  `--hashes` implies NTLM; only the NT half is used. Cleartext NTLM is refused unless
+  `--allow-plaintext-ldap`. Kerberos (`-k`) is accepted and **refuses to run** with a
+  clear message. *Status:* hash parsing, principal splitting, method resolution and
+  every refusal are unit-tested; the NTLMSSP handshake itself is **code-only** (no AD
+  lab available).
 - **BloodHound CE interop** — import CE v5 JSON / BloodHound.py `--zip` (with ACE,
   session, local-admin, delegation, trust and GPO-link mapping), and export a native CE
   v5 archive via `--zip`.
@@ -52,10 +63,10 @@ every gap is reported rather than faked. This page is the current boundary.
 
 | Item | Notes |
 |---|---|
-| **Native CLI parity** | Broaden direct collection so fewer gaps need an import bridge. |
-| **Sessions & local-admin** | SMB/NetSession enumeration and `AdminTo`/`CanRDP`/`CanPSRemote` results. |
+| **Kerberos auth** | `-k` / `--auth-method kerberos` — accepted today and refuses to run. |
 | **Incremental merge** | SID-keyed incremental re-collection with **stale-edge expiry** (edges carry `first_seen`/`last_seen`). |
-| **NTLM / Kerberos / pass-the-hash** | NTLM and pass-the-hash **shipped** (`--auth-method ntlm`, `--hashes`); Kerberos (`-k`) still fails loudly. |
+| **Concurrent SMB** | The SMB pass is deliberately sequential (OPSEC); a bounded worker pool is the fast-mode follow-up. |
+| **Delegation collection** | `AllowedToDelegate` / `AllowedToAct` are imported but not yet collected natively. |
 
 ## Exploratory
 
@@ -73,7 +84,7 @@ every gap is reported rather than faked. This page is the current boundary.
 
 ## Compatibility promise
 
-Until the roadmap items land, **`omenhound import` is the stable interface** for anything
-OmenHound can't collect itself. Existing BloodHound CE / BloodHound.py output continues
-to load into the CE-schema graph, and unsupported auth or methods fail loudly rather than
-degrading silently.
+OmenHound collects every BloodHound.py method natively, and **`omenhound import`** stays
+the stable interface for anything else (existing CE data, delegation edges, other
+exporters). BloodHound CE / BloodHound.py output continues to load into the CE-schema
+graph, and unsupported auth (Kerberos today) fails loudly rather than degrading silently.

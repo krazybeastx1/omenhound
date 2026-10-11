@@ -2,52 +2,178 @@ package collector
 
 import (
 	"context"
-	"errors"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
 	"time"
 
-	"github.com/hirochachacha/go-smb2"
+	"github.com/jfjallid/go-smb/dcerpc"
+	"github.com/jfjallid/go-smb/dcerpc/mssrvs"
+	"github.com/jfjallid/go-smb/dcerpc/smbtransport"
+	"github.com/jfjallid/go-smb/smb"
+	"github.com/jfjallid/go-smb/spnego"
 )
 
-// ErrSessionsPlanned marks SMB session enumeration as designed-but-unbuilt.
-var ErrSessionsPlanned = errors.New("collector: SMB session enumeration is planned but not implemented (see docs/ARCHITECTURE.md)")
+// SMB/DCE-RPC plumbing for the SMB collection methods (session, localadmin,
+// rdp, dcom, psremote, loggedon).
+//
+// BloodHound.py does this with impacket's DCE/RPC clients over SMB named pipes.
+// OmenHound uses github.com/jfjallid/go-smb, which implements the same SMB2 +
+// MS-RPC stack (srvsvc / samr / wkssvc / lsarpc), so the calls, their levels and
+// the result filtering mirror BloodHound.py's.
 
-// SMBProbe connects to host over SMB (445) and returns the share names the
-// credentials can see. It is used as a lightweight access/connectivity check.
-func SMBProbe(ctx context.Context, host, domain, user string, password []byte) ([]string, error) {
-	d := net.Dialer{Timeout: 10 * time.Second}
-	addr := host
-	if !strings.Contains(addr, ":") {
-		addr += ":445"
+// smbPort is the only SMB port OmenHound uses. BloodHound.py (through impacket)
+// also falls back to NetBIOS session service on 139; github.com/jfjallid/go-smb
+// speaks only direct SMB-over-TCP (445), so that fallback is not attempted.
+const smbPort = 445
+
+const (
+	// smbDialTimeout bounds the TCP + SMB negotiation to one host.
+	smbDialTimeout = 10 * time.Second
+	// smbHostTimeout bounds all RPC work against a single host, so one
+	// unresponsive machine cannot stall the whole run.
+	smbHostTimeout = 30 * time.Second
+)
+
+// smbOptions builds the client options for one host from the collection
+// credentials. Pass-the-hash is passed to the NTLM initiator as the raw NT hash,
+// which is what the library's HMAC key derivation expects.
+func smbOptions(o Options, host string) (smb.Options, error) {
+	user, dom := SplitUserDomain(o.Username, o.Domain)
+	init := &spnego.NTLMInitiator{
+		User:     user,
+		Domain:   dom,
+		Password: string(o.Password),
 	}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	if len(o.Hashes) > 0 {
+		nt, err := NormalizeHash(string(o.Hashes))
+		if err != nil {
+			return smb.Options{}, err
+		}
+		raw, err := hex.DecodeString(nt)
+		if err != nil {
+			return smb.Options{}, err
+		}
+		init.Hash = raw
+		init.Password = ""
+	}
+	return smb.Options{
+		Host:        host,
+		Port:        smbPort,
+		Initiator:   init,
+		DialTimeout: smbDialTimeout,
+	}, nil
+}
+
+// smbHost is one authenticated SMB session with the IPC$ tree connected, which
+// is all that is needed to open service named pipes on it.
+type smbHost struct {
+	conn *smb.Connection
+}
+
+// dialHost connects and authenticates to host. It performs a cheap TCP probe
+// first (like BloodHound.py's tcp_ping) so that a dead host costs a connect
+// attempt rather than a full SMB negotiation.
+func dialHost(ctx context.Context, o Options, host string) (*smbHost, error) {
+	if host == "" {
+		return nil, fmt.Errorf("smb: empty host")
+	}
+	if len(o.Password) == 0 && len(o.Hashes) == 0 {
+		return nil, fmt.Errorf("smb: no password or hash available for SMB authentication")
+	}
+	addr := net.JoinHostPort(host, fmt.Sprint(smbPort))
+	if !tcpProbe(ctx, addr) {
+		return nil, fmt.Errorf("smb: %s is not reachable", addr)
+	}
+	opts, err := smbOptions(o, host)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := smb.NewConnection(opts)
 	if err != nil {
 		return nil, fmt.Errorf("smb: dial %s: %w", addr, err)
 	}
-	defer conn.Close()
-
-	dialer := &smb2.Dialer{Initiator: &smb2.NTLMInitiator{
-		User:     user,
-		Password: string(password),
-		Domain:   domain,
-	}}
-	sess, err := dialer.Dial(conn)
-	if err != nil {
-		return nil, fmt.Errorf("smb: negotiate/auth as %q: %w", user, err)
+	if err := conn.TreeConnect("IPC$"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("smb: TreeConnect IPC$ on %s: %w", addr, err)
 	}
-	defer sess.Logoff()
+	return &smbHost{conn: conn}, nil
+}
 
-	names, err := sess.ListSharenames()
+func tcpProbe(ctx context.Context, addr string) bool {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("smb: list shares: %w", err)
+		return false
+	}
+	c.Close()
+	return true
+}
+
+func (h *smbHost) close() {
+	if h == nil || h.conn == nil {
+		return
+	}
+	h.conn.TreeDisconnect("IPC$")
+	h.conn.Close()
+}
+
+// rpc opens a named pipe, binds the given DCE/RPC interface over it and returns
+// the binding plus a cleanup function. This mirrors BloodHound.py's
+// dce_rpc_connect: the RPC bind carries no separate authentication, because the
+// SMB session is already authenticated and every call is signed by SMB.
+func (h *smbHost) rpc(pipe, uuid string, major, minor uint16) (*dcerpc.ServiceBind, func(), error) {
+	const share = "IPC$"
+	f, err := h.conn.OpenFile(share, pipe)
+	if err != nil {
+		return nil, nil, fmt.Errorf("smb: open pipe %s: %w", pipe, err)
+	}
+	cleanup := func() { f.CloseFile() }
+	tr, err := smbtransport.NewSMBTransport(f)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("smb: transport %s: %w", pipe, err)
+	}
+	bind, err := dcerpc.Bind(tr, uuid, major, minor, dcerpc.MSRPCUuidNdr)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("smb: bind %s: %w", pipe, err)
+	}
+	return bind, cleanup, nil
+}
+
+// SMBProbe connects to host over SMB and returns the share names the
+// credentials can see. It is used as a lightweight access/connectivity check.
+func SMBProbe(ctx context.Context, host, domain, user string, password []byte) ([]string, error) {
+	o := Options{Domain: domain, Username: user, Password: password}
+	ctx, cancel := context.WithTimeout(ctx, smbHostTimeout)
+	defer cancel()
+
+	h, err := dialHost(ctx, o, host)
+	if err != nil {
+		return nil, err
+	}
+	defer h.close()
+
+	bind, cleanup, err := h.rpc(mssrvs.MSRPCSrvSvcPipe, mssrvs.MSRPCUuidSrvSvc, mssrvs.MSRPCSrvSvcMajorVersion, mssrvs.MSRPCSrvSvcMinorVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	shares, err := mssrvs.NewRPCCon(bind).NetShareEnumAll(host)
+	if err != nil {
+		return nil, fmt.Errorf("smb: NetShareEnumAll: %w", err)
+	}
+	names := make([]string, 0, len(shares))
+	for _, s := range shares {
+		names = append(names, s.Name)
 	}
 	return names, nil
 }
 
-// CollectSessions is a placeholder for SMB/WinRM session (net session) and
-// remote-admin enumeration, which is planned but not built.
-func CollectSessions(context.Context, Options) ([]string, error) {
-	return nil, ErrSessionsPlanned
+// stripNUL removes the trailing NUL that NDR varying strings can carry.
+func stripNUL(s string) string {
+	return strings.TrimRight(s, "\x00")
 }

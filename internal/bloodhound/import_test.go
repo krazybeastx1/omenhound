@@ -175,6 +175,84 @@ func TestImportCEZip(t *testing.T) {
 	}
 }
 
+// TestImportCELocalGroups proves OmenHound reads BloodHound CE v5
+// "LocalGroups" (the format bloodhound-ce-python emits), not just the legacy
+// LocalAdmins/… fields: each well-known alias becomes member -> computer edges.
+func TestImportCELocalGroups(t *testing.T) {
+	const (
+		pc  = "S-1-5-21-7-7-7-1004"
+		grp = "S-1-5-21-7-7-7-512"
+		usr = "S-1-5-21-7-7-7-1103"
+	)
+	files := map[string]string{
+		"bh_computers.json": `{"data":[
+		{"ObjectIdentifier":"` + pc + `",
+		 "Properties":{"name":"WS02.CORP.LOCAL","samaccountname":"WS02$","domain":"CORP.LOCAL"},
+		 "LocalGroups":[
+		   {"ObjectIdentifier":"` + pc + `-544","Name":"ADMINISTRATORS@WS02","Collected":true,
+		    "Results":[{"ObjectIdentifier":"` + grp + `","ObjectType":"Group"}]},
+		   {"ObjectIdentifier":"` + pc + `-555","Name":"REMOTE DESKTOP USERS@WS02","Collected":true,
+		    "Results":[{"ObjectIdentifier":"` + usr + `","ObjectType":"User"}]},
+		   {"ObjectIdentifier":"` + pc + `-562","Name":"DISTRIBUTED COM USERS@WS02","Collected":false,
+		    "Results":[{"ObjectIdentifier":"` + usr + `","ObjectType":"User"}]},
+		   {"ObjectIdentifier":"` + pc + `-580","Name":"REMOTE MANAGEMENT USERS@WS02","Collected":true,
+		    "Results":[{"ObjectIdentifier":"` + usr + `","ObjectType":"User"}]},
+		   {"ObjectIdentifier":"` + pc + `-579","Name":"PERF MON USERS@WS02","Collected":true,
+		    "Results":[{"ObjectIdentifier":"` + usr + `","ObjectType":"User"}]}
+		 ],"Aces":[],"IsDeleted":false}],
+		"meta":{"type":"computers","count":1,"version":5}}`,
+	}
+	g, _, err := Load(writeZip(t, files))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := ingest.Validate(g); err != nil {
+		t.Fatalf("imported graph failed validation: %v", err)
+	}
+	es := edgeSet(g)
+	for _, k := range []string{
+		"AdminTo|" + grp + "|" + pc,     // 544
+		"CanRDP|" + usr + "|" + pc,      // 555
+		"CanPSRemote|" + usr + "|" + pc, // 580
+	} {
+		if !es[k] {
+			t.Errorf("missing edge %s", k)
+		}
+	}
+	if es["ExecuteDCOM|"+usr+"|"+pc] {
+		t.Error("a LocalGroup with Collected=false must not produce an edge")
+	}
+	// Exactly the three collected, modelled aliases become edges: the
+	// un-collected 562 and the unmodelled 579 must produce none.
+	wantCounts := map[model.EdgeKind]int{
+		model.EdgeAdminTo:     1,
+		model.EdgeCanRDP:      1,
+		model.EdgeCanPSRemote: 1,
+		model.EdgeExecuteDCOM: 0,
+	}
+	for kind, want := range wantCounts {
+		if got := edgeKindCount(g, kind); got != want {
+			t.Errorf("%s edges = %d, want %d", kind, got, want)
+		}
+	}
+	if n, ok := nodeByID(g, grp); !ok || n.Kind != model.KindGroup {
+		t.Errorf("local-group member kind = %+v ok=%v, want Group", n, ok)
+	}
+	if n, ok := nodeByID(g, usr); !ok || n.Kind != model.KindUser {
+		t.Errorf("local-group member kind = %+v ok=%v, want User", n, ok)
+	}
+}
+
+func edgeKindCount(g *model.Graph, kind model.EdgeKind) int {
+	n := 0
+	for _, e := range g.Edges {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
 func TestImportEnforcedGPLinkProp(t *testing.T) {
 	g, _, err := Load(writeZip(t, fixture))
 	if err != nil {

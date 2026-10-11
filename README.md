@@ -59,7 +59,7 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 
 | Piece | What it does |
 |---|---|
-| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and emits a graph. Simple bind, NTLM and pass-the-hash (LDAPS recommended); BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. Session/local-admin enrichment on the roadmap. |
+| **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and over **SMB/RPC** (`-c session`/`localadmin`/`rdp`/`dcom`/`psremote`/`loggedon` → `HasSession`/`AdminTo`/`CanRDP`/`ExecuteDCOM`/`CanPSRemote`), emitting a graph. Simple bind, NTLM and pass-the-hash (LDAPS recommended); BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
 | **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. |
@@ -167,15 +167,20 @@ bloodhound-ce-python -d cascade.local -u s.smith -p '...' -ns 10.129.46.41 -c al
 
 `-d/--domain`, `-u/--username`, `-p/--password`, `-ns/--nameserver` (DC SRV
 discovery), `-dc/--domain-controller`, `-c/--collectionmethod`, `-op/--outputprefix`,
-`--use-ldaps`, `--zip`, `--auth-method`/`--hashes`/`-k`. Unimplemented collection
-methods and unsupported auth methods (Kerberos) **fail loudly or report an explicit
-"not implemented — skipped" warning** — they never degrade silently.
+`--use-ldaps`, `--zip`, `--auth-method`/`--hashes`/`-k`. Every BloodHound.py
+collection method is implemented (`group`, `localadmin`, `session`, `trusts`,
+`objectprops`, `acl`, `container`, `dcom`, `rdp`, `psremote`, `loggedon`); the
+SMB/RPC methods run one computer at a time, so raise `--timeout` for a large
+domain. Unsupported auth methods (Kerberos) **fail loudly** — they never degrade
+silently.
 
 Authentication is **simple bind** by default. `--auth-method ntlm` uses an NTLMSSP
 bind (no extra dependency), and `--hashes NT` or `--hashes LM:NT` performs
 **pass-the-hash** — the LM half is dropped, since NTLMSSP computes the response from
 the NT hash alone. `--hashes` implies NTLM, and cleartext NTLM is refused unless you
-pass `--allow-plaintext-ldap`. `-k/--kerberos` is accepted and **refuses to run** with
+pass `--allow-plaintext-ldap`. The SMB/RPC methods (`session`, `localadmin`, `rdp`,
+`dcom`, `psremote`, `loggedon`) authenticate over SMB with the same credentials,
+including pass-the-hash. `-k/--kerberos` is accepted and **refuses to run** with
 a clear message until the Kerberos path lands.
 
 ---
@@ -280,8 +285,10 @@ or a database.
 - [x] ACL (`nTSecurityDescriptor`) → `Owns`/`GenericAll`/`WriteDacl`/`GetChanges`/… edges
       *(parser and ACE mapping unit-tested against impacket-generated descriptors; the live LDAP path is code-only — no AD lab)*
 - [x] OU / GPO / container → `Contains` + `GPLink`, and domain trusts → `TrustedBy`
-- [ ] SMB session & local-admin (`AdminTo`, `CanPSRemote`, `HasSession`)
-- [x] NTLM bind (`--auth-method ntlm`) and pass-the-hash (`--hashes`) over LDAP/LDAPS
+- [x] SMB sessions & local groups (`HasSession`, `AdminTo`, `CanRDP`, `ExecuteDCOM`,
+      `CanPSRemote`) — `-c session,localadmin,rdp,dcom,psremote,loggedon`
+      *(filtering/resolution unit-tested; DC local groups are skipped; the live SMB/RPC path is code-only — no SMB host was available)*
+- [x] NTLM bind (`--auth-method ntlm`) and pass-the-hash (`--hashes`) over LDAP/LDAPS and SMB
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
 - [ ] Kerberos auth (`-k`) — accepted and refuses to run until implemented
 - [ ] Customized BloodHound CE frontend (stock CE UI as fallback)
