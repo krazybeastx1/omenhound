@@ -24,12 +24,13 @@ directions, and **reports** anything it can't map.
 | Method | BloodHound.py | OmenHound (now) |
 |---|---|---|
 | LDAP simple bind + LDAPS | ✓ | **✓ supported** |
-| LDAP simple bind + Kerberos (`-k`, `--kerberos`) | ✓ | roadmap — fails loudly until implemented |
+| LDAP simple bind + Kerberos (`-k`, `--kerberos`) | ✓ | **✓** (password, NT hash, AES key, or `$KRB5CCNAME`) |
 | Pass-the-hash (`--hashes`) | ✓ | **✓** (`NT` or `LM:NT`; implies NTLM) |
 | NTLM auth (`--auth-method ntlm`) | ✓ | **✓** (plain password, hash, or empty password) |
 
-OmenHound refuses to silently fall back. If you pass an unsupported auth method, it
-tells you it is not implemented instead of collecting with weaker guarantees.
+OmenHound refuses to silently fall back. An unknown auth method is rejected, and a
+Kerberos run with no credential source is refused before any traffic, instead of
+dropping to a weaker bind.
 
 NTLM and pass-the-hash use go-ldap's built-in NTLMSSP bind, so there is no extra
 dependency and no weaker protocol. Only the **NT** half of `--hashes` is used — the LM
@@ -37,10 +38,21 @@ half is discarded because NTLMSSP derives the response from the NT hash. As with
 bind, a cleartext (non-LDAPS) NTLM bind is refused unless you pass
 `--allow-plaintext-ldap`, because NTLM over cleartext LDAP is relayable.
 
-> **Validation status.** The hash parsing (impacket's `LM:NT` and bare-NT forms), the
-> `DOMAIN\user` / `user@domain` split, the auth-method resolution and every refusal path
-> are unit-tested. The bind itself is **code-only**: no AD lab was available, so the
-> NTLMSSP handshake has not been exercised against a real DC.
+Kerberos (`-k`) authenticates LDAP with a **GSSAPI SASL bind** and SMB with a **cifs
+service ticket**, both from one credential source: a password, an NT hash
+(`--hashes`, RC4-HMAC overpass-the-hash), an AES key (`--aes-key`), or an existing
+ccache (`--use-kcache`, `$KRB5CCNAME`). It needs the DC **hostname** (`--server
+dc01.corp.local`), because a service ticket is issued for a name, not an address;
+`--dc-ip` supplies the KDC address when that name does not resolve. As with
+BloodHound.py, OmenHound never prompts — use `--password-stdin` or
+`$OMENHOUND_PASSWORD`.
+
+> **Validation status.** The hash/AES-key parsing (impacket's `LM:NT` and bare-NT
+> forms), the `DOMAIN\user` / `user@domain` split, the SPN construction, the KDC
+> selection, the auth-method resolution and every refusal path are unit-tested. The
+> handshakes themselves — NTLMSSP, LDAP GSSAPI SASL and SMB Kerberos — are
+> **code-only**: no AD lab was available, so none has been exercised against a real
+> domain controller.
 
 `--use-ldaps` and `-ns/--nameserver` (DC SRV discovery) behave as you expect.
 `--ldap-channel-binding` is accepted for parity and documented as a **no-op for simple
@@ -191,7 +203,9 @@ Import → export → import round-trips losslessly on the test fixture.
 |---|---|
 | Unknown collection method | error listing known methods |
 | Some methods unimplemented | run proceeds + explicit warnings in `Meta.Warnings` |
-| Unsupported auth method (Kerberos) | loud "not implemented", no collection |
+| Unknown auth method | error before any traffic |
+| Kerberos with no credentials / against an IP | error before any traffic (a ticket needs a hostname) |
+| `--use-kcache` with no `$KRB5CCNAME` | error before any traffic |
 | Plaintext LDAP requested | refusal unless `--allow-plaintext-ldap` |
 | SMB methods requested with no password/hash | run proceeds; LDAP-only graph + explicit warning |
 | SMB host unreachable / RPC denied | counted, reported in `Meta.Warnings`, run continues |

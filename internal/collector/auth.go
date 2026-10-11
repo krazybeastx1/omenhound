@@ -30,6 +30,12 @@ const (
 func (o Options) EffectiveAuthMethod() (string, error) {
 	switch m := strings.ToLower(strings.TrimSpace(o.AuthMethod)); m {
 	case "", "auto":
+		// An AES key and a ccache only mean anything to Kerberos, so they
+		// select it; a hash keeps selecting NTLM (use --auth-method kerberos
+		// explicitly for overpass-the-hash).
+		if len(o.AESKey) > 0 || o.UseKcache {
+			return AuthKerberos, nil
+		}
 		if len(o.Hashes) > 0 {
 			return AuthNTLM, nil
 		}
@@ -120,13 +126,8 @@ func bindLDAP(conn *ldap.Conn, o Options) error {
 		return nil
 
 	case AuthKerberos:
-		return errKerberosNotImplemented
+		return kerberosBindLDAP(conn, o)
 	}
 	// Unreachable: EffectiveAuthMethod only returns the constants above.
 	return fmt.Errorf("ldap: unhandled authentication method %q", method)
 }
-
-// errKerberosNotImplemented is returned until the Kerberos path lands. It is an
-// explicit refusal, never a silent fallback to a weaker bind.
-var errKerberosNotImplemented = errors.New(
-	"ldap: Kerberos authentication (-k/--kerberos) is not implemented yet; use simple bind or --auth-method ntlm")

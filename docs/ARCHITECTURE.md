@@ -219,10 +219,11 @@ type Collector interface {
 ```
 
 `Options` carries connection + scope: `Domain`, `Server`, `BaseDN`, `UseLDAPS`,
-`InsecureSkipVerify`, `Username`, `Password`/`Hashes` (from `internal/creds`, never
-logged), `AuthMethod` (simple/NTLM/kerberos), `Timeout`, `AllowPlaintextLDAP`, and the
-resolved BloodHound.py-style method plan `Methods`. The SMB/RPC passes reuse the same
-`Username`/`Password`/`Hashes`, so pass-the-hash authenticates both LDAP and SMB.
+`InsecureSkipVerify`, `Username`, `Password`/`Hashes`/`AESKey`/`UseKcache`/`DCIP`
+(secrets from `internal/creds`, never logged), `AuthMethod` (simple/NTLM/kerberos),
+`Timeout`, `AllowPlaintextLDAP`, and the resolved BloodHound.py-style method plan
+`Methods`. The SMB/RPC passes reuse the same `Username`/`Password`/`Hashes`/`AESKey`/
+`UseKcache`, so pass-the-hash and Kerberos authenticate both LDAP and SMB.
 
 ```go
 // internal/graph
@@ -259,12 +260,25 @@ Primary collector, built on `go-ldap`:
      impacket's `LM:NT` and bare `NT` forms and keeps only the NT half, because
      the NTLMSSP response is derived from the NT hash alone. Supplying hashes
      selects NTLM implicitly, exactly as BloodHound.py does.
+   - **Kerberos** (`-k` / `--auth-method kerberos`) — a GSSAPI SASL bind
+     (`Conn.GSSAPIBindRequest`) driven by a Kerberos initiator built in
+     `kerberos.go`. One credential source feeds both LDAP and SMB: a password, an
+     NT hash (`--hashes`, RC4-HMAC overpass-the-hash), an AES key (`--aes-key`),
+     or a ccache (`--use-kcache`, `$KRB5CCNAME`); an AES key or a ccache implies
+     Kerberos, since neither has any other meaning. The SPN is `ldap/<dc-fqdn>`
+     (LDAP) or `cifs/<host-fqdn>` (SMB), so the DC must be named by hostname. The SMB
+     pass logs on **once** and reuses that Kerberos client for every host — one
+     AS-REQ for the run, then one TGS request per computer (BloodHound.py's
+     behaviour) — while still giving each host its own initiator so the
+     per-connection wrap sequence starts clean. The LDAP pass logs on
+     separately, so a `-c all` run makes two AS-REQs in total.
 
-   `-k/--kerberos` resolves to a third method that currently **refuses to run**
-   with an explicit message. Every refusal (unknown method, `--hashes` with a
-   simple bind, Kerberos) happens in `validateOptions` **before any network
-   traffic**, and a cleartext (non-LDAPS) simple or NTLM bind is refused unless
-   `--allow-plaintext-ldap` is set, because NTLM over cleartext LDAP is relayable.
+   Every refusal (unknown method, `--hashes` with a simple bind, Kerberos with no
+   credential source or an IP `--server`, `--use-kcache` without `$KRB5CCNAME`,
+   `--aes-key`/`--use-kcache` with a non-Kerberos method) happens in
+   `validateOptions` **before any network traffic**, and a cleartext (non-LDAPS)
+   simple or NTLM bind is refused unless `--allow-plaintext-ldap` is set, because
+   NTLM over cleartext LDAP is relayable.
    Credentials and hashes are `[]byte` and zeroed after use, like the password.
 2. **RootDSE + naming contexts.** Discover `defaultNamingContext`,
    `configurationNamingContext`, `rootDomainNamingContext`, supported controls.
@@ -673,8 +687,11 @@ keeping the public API surface to exactly one package.
   `memory.go`; the CLI with all four subcommands and `export`. Deliverable:
   `make run-sample` works end to end with no AD and no Neo4j.
 - **Phase 1b — Auth surface (done).** `auth.go`: simple bind, **NTLM bind and
-  pass-the-hash** via go-ldap's NTLMSSP (no new dependency), with Kerberos as the
-  one method that refuses to run until it lands.
+  pass-the-hash** via go-ldap's NTLMSSP (no new dependency), and **Kerberos**
+  (`kerberos.go`: GSSAPI SASL over LDAP, cifs service ticket over SMB) from a
+  password, NT hash, AES key or ccache. Unit-tested end to end for parsing,
+  SPN construction, KDC selection and every refusal; the live handshakes are
+  **code-only** (no AD lab available).
 - **Phase 2 — Ingestion + API.** `internal/ingest` validation/merge and
   `internal/api` read + ingest endpoints with auth. Deliverable: push a sample
   graph over HTTP and query it back.

@@ -32,6 +32,8 @@ github.com/jfjallid/gokrb5/v9 v9.1.0 h1:2hY++n991tvZuG8ra9W9zFpIp/APSxBJDkETcdhr
 github.com/jfjallid/gokrb5/v9 v9.1.0/go.mod h1:2DeagoxFvbHs/K9LUeYW65IFUIXFe+EULWqK0rRPRLw=
 github.com/jfjallid/golog v0.4.0 h1:JDYkb3Q2JX1F5gqCSTQKuS30fM96qLEVkntuBpyBdpY=
 github.com/jfjallid/golog v0.4.0/go.mod h1:19Q/zg5OgPPd0xhFllokPnMzthzhFPZmiAGAokE7k58=
+github.com/jfjallid/ldap/v3 v3.102.0 h1:DFnptZdciVLGrvDVgT1bheR3WDqkUuSI1fL4Bw/+1c4=
+github.com/jfjallid/ldap/v3 v3.102.0/go.mod h1:64QONcfCOiwd5+3ZijLRwp1Ywzwk6DkzBQmweUphQ8E=
 github.com/jfjallid/mstypes v0.0.2 h1:bYXHnkT7qnfdgc3wSKnPKcRo3jrjY+FV/HqwaYbi4zY=
 github.com/jfjallid/mstypes v0.0.2/go.mod h1:a3RS3XrUS/+1FbmUNDHB2cJ878Z//brwfxBTG9PB9/M=
 github.com/jfjallid/ndr v0.2.0 h1:ezGAN01UNGJeEAuFfZPuLgSQP461xk+cUeMJSFEIHHU=

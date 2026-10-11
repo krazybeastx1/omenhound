@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jfjallid/go-smb/krb5ssp"
 	"github.com/krazybeastx1/omenhound/pkg/model"
 )
 
@@ -35,6 +36,22 @@ type Options struct {
 	// (pass-the-hash, "LMHASH:NTHASH" or a bare 32-hex NT hash). []byte so it can
 	// be zeroed after use, like Password.
 	Hashes []byte
+	// UseKcache selects Kerberos ccache authentication: the TGT is read from
+	// the file named by $KRB5CCNAME instead of being requested with a
+	// password, hash or AES key. Only meaningful with AuthKerberos.
+	UseKcache bool
+	// AESKey is a raw Kerberos AES key (16 bytes = AES-128, 32 = AES-256) used
+	// to request a TGT instead of a password. Only meaningful with AuthKerberos.
+	AESKey []byte
+	// DCIP is the domain controller IP dialed as the KDC. When empty the
+	// collector resolves Server for it. Only used by Kerberos.
+	DCIP string
+	// krbClient is the Kerberos logon shared by every host in the SMB pass. It
+	// is filled in by the SMB pass itself — never by the CLI — so the run makes
+	// one AS-REQ and then one TGS request per host, instead of a fresh AS-REQ
+	// per host. Each host still gets its own initiator, so the per-connection
+	// wrap sequence starts clean.
+	krbClient *krb5ssp.Client
 	// Timeout bounds the whole run.
 	Timeout time.Duration
 	// IncludeSessions is a legacy shorthand for the "session" collection method;
@@ -65,11 +82,20 @@ func validateOptions(o Options) error {
 	if err != nil {
 		return err
 	}
-	if method == AuthSimple && len(o.Hashes) > 0 {
-		return errors.New("ldap: --hashes only applies to NTLM; drop --auth-method simple or use --auth-method ntlm")
-	}
 	if method == AuthKerberos {
-		return errKerberosNotImplemented
+		if err := validateKerberosOptions(o); err != nil {
+			return err
+		}
+	} else {
+		if len(o.AESKey) > 0 {
+			return errors.New("ldap: --aes-key only applies to Kerberos; add --auth-method kerberos")
+		}
+		if o.UseKcache {
+			return errors.New("ldap: --use-kcache only applies to Kerberos; add --auth-method kerberos")
+		}
+		if method == AuthSimple && len(o.Hashes) > 0 {
+			return errors.New("ldap: --hashes only applies to NTLM or Kerberos; drop --auth-method simple or use --auth-method ntlm")
+		}
 	}
 	if !o.UseLDAPS && !o.AllowPlaintextLDAP {
 		return errors.New("ldap: refusing plaintext LDAP; a simple or NTLM bind would expose credentials " +

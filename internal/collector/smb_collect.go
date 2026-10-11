@@ -153,10 +153,30 @@ func collectSMB(ctx context.Context, g *model.Graph, o Options) error {
 	// reporting; real failures still come back as errors and are counted in
 	// Meta.Warnings.
 	golog.SetLogLevel(golog.LevelNone)
-	if len(o.Password) == 0 && len(o.Hashes) == 0 {
+	if !smbHasCredentials(o) {
 		g.Meta.Warnings = append(g.Meta.Warnings,
 			"smb: no password or hash available for SMB authentication — session and local-group methods skipped")
 		return nil
+	}
+
+	// Kerberos: log in once for the whole pass and share the client, so the run
+	// makes one AS-REQ and then a TGS request per host (BloodHound.py's
+	// behaviour) rather than a fresh AS-REQ per computer. A logon failure here
+	// is reported and the pass is skipped — never degraded to a weaker method.
+	if method, err := o.EffectiveAuthMethod(); err == nil && method == AuthKerberos {
+		seed, err := kerberosInitiator(o, kerberosHost(o.Server), "cifs")
+		if err != nil {
+			g.Meta.Warnings = append(g.Meta.Warnings,
+				"smb: Kerberos: "+err.Error()+" — session and local-group methods skipped")
+			return nil
+		}
+		kc, err := seed.Client()
+		if err != nil {
+			g.Meta.Warnings = append(g.Meta.Warnings, fmt.Sprintf(
+				"smb: Kerberos logon failed (%v) — session and local-group methods skipped", err))
+			return nil
+		}
+		o.krbClient = kc
 	}
 	if smbMethodRequested(o.Methods, "loggedon") {
 		g.Meta.Warnings = append(g.Meta.Warnings,

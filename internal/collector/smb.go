@@ -37,9 +37,46 @@ const (
 )
 
 // smbOptions builds the client options for one host from the collection
-// credentials. Pass-the-hash is passed to the NTLM initiator as the raw NT hash,
-// which is what the library's HMAC key derivation expects.
+// credentials. Kerberos passes a KRB5Initiator (the service ticket is requested
+// for cifs/<host>); otherwise the NTLM initiator is used, with pass-the-hash
+// handed the raw NT hash, which is what the library's HMAC key derivation
+// expects.
 func smbOptions(o Options, host string) (smb.Options, error) {
+	method, err := o.EffectiveAuthMethod()
+	if err != nil {
+		return smb.Options{}, err
+	}
+	opts := smb.Options{
+		Host:        host,
+		Port:        smbPort,
+		DialTimeout: smbDialTimeout,
+	}
+	if method == AuthKerberos {
+		var init *spnego.KRB5Initiator
+		if o.krbClient != nil {
+			// Reuse the run's Kerberos logon: only a TGS request per host.
+			init, err = kerberosSMBInitiator(host, o.krbClient)
+		} else {
+			init, err = kerberosInitiator(o, host, "cifs")
+		}
+		if err != nil {
+			return smb.Options{}, err
+		}
+		opts.Initiator = init
+		return opts, nil
+	}
+	init, err := smbNTLMInitiator(o)
+	if err != nil {
+		return smb.Options{}, err
+	}
+	opts.Initiator = init
+	return opts, nil
+}
+
+// smbNTLMInitiator builds the NTLMSSP initiator for the SMB session. Pass-the-hash
+// is passed to the initiator as the raw NT hash, which is what the library's HMAC
+// key derivation expects.
+func smbNTLMInitiator(o Options) (*spnego.NTLMInitiator, error) {
 	user, dom := SplitUserDomain(o.Username, o.Domain)
 	init := &spnego.NTLMInitiator{
 		User:     user,
@@ -49,21 +86,16 @@ func smbOptions(o Options, host string) (smb.Options, error) {
 	if len(o.Hashes) > 0 {
 		nt, err := NormalizeHash(string(o.Hashes))
 		if err != nil {
-			return smb.Options{}, err
+			return nil, err
 		}
 		raw, err := hex.DecodeString(nt)
 		if err != nil {
-			return smb.Options{}, err
+			return nil, err
 		}
 		init.Hash = raw
 		init.Password = ""
 	}
-	return smb.Options{
-		Host:        host,
-		Port:        smbPort,
-		Initiator:   init,
-		DialTimeout: smbDialTimeout,
-	}, nil
+	return init, nil
 }
 
 // smbHost is one authenticated SMB session with the IPC$ tree connected, which
@@ -79,7 +111,7 @@ func dialHost(ctx context.Context, o Options, host string) (*smbHost, error) {
 	if host == "" {
 		return nil, fmt.Errorf("smb: empty host")
 	}
-	if len(o.Password) == 0 && len(o.Hashes) == 0 {
+	if !smbHasCredentials(o) {
 		return nil, fmt.Errorf("smb: no password or hash available for SMB authentication")
 	}
 	addr := net.JoinHostPort(host, fmt.Sprint(smbPort))

@@ -109,6 +109,10 @@ func cmdCollect(args []string) int {
 		hashes           = fs.String("hashes", "", "NTLM NT hash for pass-the-hash, as NT or LM:NT (implies --auth-method ntlm)")
 		kerberos         = fs.Bool("kerberos", false, "use Kerberos authentication (alias of --auth-method kerberos)")
 		kerberosShort    = fs.Bool("k", false, "alias of --kerberos")
+		useKcache        = fs.Bool("use-kcache", false, "Kerberos: authenticate from the TGT in $KRB5CCNAME (no password/hash/AES key)")
+		aesKey           = fs.String("aes-key", "", "Kerberos AES key (hex, 16 or 32 bytes); implies --auth-method kerberos")
+		aesKeyLong       = fs.String("aesKey", "", "alias of --aes-key")
+		dcIP             = fs.String("dc-ip", "", "DC IP address used as the Kerberos KDC (when --server/--dc is a hostname that does not resolve)")
 		plaintext        = fs.Bool("allow-plaintext-ldap", false, "allow binding over unencrypted LDAP (lab only; refused by default)")
 		timeout          = fs.Duration("timeout", 60*time.Second, "collection timeout")
 		collection       = fs.String("c", "", "collection methods, comma-separated (group,objectprops,... | all | default | dc)")
@@ -200,6 +204,22 @@ func cmdCollect(args []string) int {
 		log.Printf("WARNING: --hashes is visible in process listings; prefer --password-stdin or $OMENHOUND_PASSWORD")
 	}
 
+	var aesKeyBytes []byte
+	if ak := pick(*aesKey, *aesKeyLong); ak != "" {
+		b, err := collector.NormalizeAESKey(ak)
+		if err != nil {
+			log.Printf("collect: %v", err)
+			return 2
+		}
+		aesKeyBytes = b
+		defer zero(aesKeyBytes)
+		log.Printf("WARNING: --aes-key is visible in process listings; prefer --use-kcache or --password-stdin")
+	}
+	if len(hashBytes) > 0 && len(aesKeyBytes) > 0 {
+		log.Printf("collect: --hashes and --aes-key are mutually exclusive")
+		return 2
+	}
+
 	pw, err := readPassword(passVal, *passwordStdin)
 	if err != nil {
 		log.Printf("collect: %v", err)
@@ -220,6 +240,7 @@ func cmdCollect(args []string) int {
 		InsecureSkipVerify: *insecure, Username: userVal, Password: pw, Timeout: *timeout,
 		AllowPlaintextLDAP: *plaintext, Methods: &plan,
 		AuthMethod: authVal, Hashes: hashBytes,
+		UseKcache: *useKcache, AESKey: aesKeyBytes, DCIP: *dcIP,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.EffectiveTimeout())

@@ -38,8 +38,10 @@ Go dependencies (see go.mod for exact versions)
   github.com/jfjallid/gofork            BSD-3-Clause
   github.com/jfjallid/gokrb5/v9         Apache-2.0
   github.com/jfjallid/golog             MIT
+  github.com/jfjallid/ldap/v3           MIT
   github.com/jfjallid/mstypes           Apache-2.0
   github.com/jfjallid/ndr               Apache-2.0
+  github.com/alexbrainman/sspi          BSD-3-Clause
   software.sslmate.com/src/go-pkcs12    BSD-3-Clause
   golang.org/x/crypto                   BSD-3-Clause
   golang.org/x/net                      BSD-3-Clause

@@ -41,10 +41,15 @@ every gap is reported rather than faked. This page is the current boundary.
   **pass-the-hash** (`--hashes NT|LM:NT`) over LDAPS **and SMB**, using go-ldap's
   NTLMSSP bind for LDAP and the SMB library's NTLM initiator (raw NT hash) for SMB.
   `--hashes` implies NTLM; only the NT half is used. Cleartext NTLM is refused unless
-  `--allow-plaintext-ldap`. Kerberos (`-k`) is accepted and **refuses to run** with a
-  clear message. *Status:* hash parsing, principal splitting, method resolution and
-  every refusal are unit-tested; the NTLMSSP handshake itself is **code-only** (no AD
-  lab available).
+  `--allow-plaintext-ldap`. **Kerberos** (`-k` / `--auth-method kerberos`) drives LDAP
+  through a GSSAPI SASL bind and SMB through a cifs service ticket, from a password,
+  NT hash (`--hashes`, overpass-the-hash), AES key (`--aes-key`) or an existing ccache
+  (`--use-kcache`, `$KRB5CCNAME`). The SMB pass logs on **once** and reuses the TGT —
+  one AS-REQ for the run, one TGS per host, like BloodHound.py. *Status:* hash/AES/key
+  parsing, principal splitting, SPN construction, KDC selection, method resolution and
+  every refusal are unit-tested; the NTLMSSP and Kerberos handshakes themselves are
+  **code-only** (no AD lab available). Kerberos needs the DC **hostname**
+  (`--server dc01.corp.local`), not an IP.
 - **BloodHound CE interop** — import CE v5 JSON / BloodHound.py `--zip` (with ACE,
   session, local-admin, delegation, trust and GPO-link mapping), and export a native CE
   v5 archive via `--zip`.
@@ -63,7 +68,6 @@ every gap is reported rather than faked. This page is the current boundary.
 
 | Item | Notes |
 |---|---|
-| **Kerberos auth** | `-k` / `--auth-method kerberos` — accepted today and refuses to run. |
 | **Incremental merge** | SID-keyed incremental re-collection with **stale-edge expiry** (edges carry `first_seen`/`last_seen`). |
 | **Concurrent SMB** | The SMB pass is deliberately sequential (OPSEC); a bounded worker pool is the fast-mode follow-up. |
 | **Delegation collection** | `AllowedToDelegate` / `AllowedToAct` are imported but not yet collected natively. |
@@ -87,4 +91,4 @@ every gap is reported rather than faked. This page is the current boundary.
 OmenHound collects every BloodHound.py method natively, and **`omenhound import`** stays
 the stable interface for anything else (existing CE data, delegation edges, other
 exporters). BloodHound CE / BloodHound.py output continues to load into the CE-schema
-graph, and unsupported auth (Kerberos today) fails loudly rather than degrading silently.
+graph, and an unknown auth method fails loudly rather than degrading silently.

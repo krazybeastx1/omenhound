@@ -167,12 +167,12 @@ bloodhound-ce-python -d cascade.local -u s.smith -p '...' -ns 10.129.46.41 -c al
 
 `-d/--domain`, `-u/--username`, `-p/--password`, `-ns/--nameserver` (DC SRV
 discovery), `-dc/--domain-controller`, `-c/--collectionmethod`, `-op/--outputprefix`,
-`--use-ldaps`, `--zip`, `--auth-method`/`--hashes`/`-k`. Every BloodHound.py
-collection method is implemented (`group`, `localadmin`, `session`, `trusts`,
-`objectprops`, `acl`, `container`, `dcom`, `rdp`, `psremote`, `loggedon`); the
-SMB/RPC methods run one computer at a time, so raise `--timeout` for a large
-domain. Unsupported auth methods (Kerberos) **fail loudly** — they never degrade
-silently.
+`--use-ldaps`, `--zip`, `--auth-method`/`--hashes`/`-k`/`--use-kcache`/`--aes-key`/
+`--dc-ip`. Every BloodHound.py collection method is implemented (`group`,
+`localadmin`, `session`, `trusts`, `objectprops`, `acl`, `container`, `dcom`, `rdp`,
+`psremote`, `loggedon`); the SMB/RPC methods run one computer at a time, so raise
+`--timeout` for a large domain. An unknown auth method **fails loudly** — it never
+degrades silently.
 
 Authentication is **simple bind** by default. `--auth-method ntlm` uses an NTLMSSP
 bind (no extra dependency), and `--hashes NT` or `--hashes LM:NT` performs
@@ -180,8 +180,24 @@ bind (no extra dependency), and `--hashes NT` or `--hashes LM:NT` performs
 the NT hash alone. `--hashes` implies NTLM, and cleartext NTLM is refused unless you
 pass `--allow-plaintext-ldap`. The SMB/RPC methods (`session`, `localadmin`, `rdp`,
 `dcom`, `psremote`, `loggedon`) authenticate over SMB with the same credentials,
-including pass-the-hash. `-k/--kerberos` is accepted and **refuses to run** with
-a clear message until the Kerberos path lands.
+including pass-the-hash.
+
+`-k/--auth-method kerberos` performs a Kerberos GSSAPI SASL bind on LDAP and a
+Kerberos SMB session, from one credential source:
+
+| Flag | Credential |
+|---|---|
+| `-p/--password` | password (AS-REQ) |
+| `--hashes NT` | NT hash → RC4-HMAC (overpass-the-hash) |
+| `--aes-key HEX` | AES-128/256 key |
+| `--use-kcache` | the TGT named by `$KRB5CCNAME` |
+
+Kerberos needs the DC **hostname** (`--server dc01.corp.local`), not its address —
+a service ticket is issued for a name. Add `--dc-ip` when that name does not resolve
+to the KDC. The SMB pass logs on once and reuses the ticket for every host (one
+AS-REQ for the run, one TGS per host). The live handshake needs a real domain
+controller and is **unvalidated** (no AD lab was available); the flag handling, SPN
+construction, credential selection and TGT reuse are unit-tested.
 
 ---
 
@@ -289,8 +305,11 @@ or a database.
       `CanPSRemote`) — `-c session,localadmin,rdp,dcom,psremote,loggedon`
       *(filtering/resolution unit-tested; DC local groups are skipped; the live SMB/RPC path is code-only — no SMB host was available)*
 - [x] NTLM bind (`--auth-method ntlm`) and pass-the-hash (`--hashes`) over LDAP/LDAPS and SMB
+- [x] Kerberos (`-k`/`--auth-method kerberos`) over LDAP GSSAPI SASL and SMB, from a
+      password, NT hash (`--hashes`), AES key (`--aes-key`) or ccache (`--use-kcache`)
+      *(flag handling, SPN construction and credential selection are unit-tested; the
+      live handshake is code-only — no domain controller was available)*
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
-- [ ] Kerberos auth (`-k`) — accepted and refuses to run until implemented
 - [ ] Customized BloodHound CE frontend (stock CE UI as fallback)
 
 ---

@@ -6,11 +6,13 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/jfjallid/go-smb v0.12.0
 	github.com/jfjallid/golog v0.4.0
+	github.com/jfjallid/ldap/v3 v3.102.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
 )
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.1 // indirect
+	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jfjallid/gofork v1.7.6 // indirect

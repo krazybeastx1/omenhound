@@ -76,6 +76,9 @@ If you already use `bloodhound-ce-python`, the collector accepts the same short 
 | `--auth-method` | `simple` (default), `ntlm`, or `kerberos` |
 | `--hashes` | NTLM **pass-the-hash**: `NT` or `LM:NT` (implies `--auth-method ntlm`) |
 | `-k`, `--kerberos` | Kerberos auth (alias of `--auth-method kerberos`) |
+| `--use-kcache` | Kerberos: take the TGT from `$KRB5CCNAME` instead of a password/hash/key |
+| `--aes-key` | Kerberos: AES-128/256 key (hex); implies `--auth-method kerberos` |
+| `--dc-ip` | DC address used as the Kerberos KDC when `--server`/`--dc` does not resolve |
 | `-c`, `--collectionmethod` | comma-separated methods, or `all` / `default` / `dc` |
 | `-op`, `--outputprefix` | filename prefix for `--zip` output |
 | `--zip` | write a **BloodHound CE v5 archive** instead of Graph JSON |
@@ -96,6 +99,21 @@ bind is refused unless you add `--allow-plaintext-ldap`):
 ./bin/omenhound collect --collector ldap -d corp.local -dc 10.0.0.10 \
   -u 'CORP\svc' --use-ldaps --hashes 'aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0' \
   -c dc --out corp.json
+```
+
+Kerberos over LDAP and SMB. The DC must be named by **hostname** (a service
+ticket is issued for a name, not an address), and cleartext LDAP is still refused
+unless `--allow-plaintext-ldap`:
+
+```bash
+# password
+./bin/omenhound collect --collector ldap -d corp.local -dc dc01.corp.local -k \
+  -u svc --password-stdin --use-ldaps -c all --zip -op corp_ --out corp.zip
+
+# a TGT you already have (e.g. after kinit)
+export KRB5CCNAME=/tmp/krb5cc_1000
+./bin/omenhound collect --collector ldap -d corp.local -dc dc01.corp.local -k \
+  --use-kcache -u svc --use-ldaps -c all --out corp.json
 ```
 
 ### Collection methods

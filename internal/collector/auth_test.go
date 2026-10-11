@@ -51,6 +51,8 @@ func TestEffectiveAuthMethod(t *testing.T) {
 		{"auto with hashes", Options{AuthMethod: "auto", Hashes: []byte("deadbeef")}, AuthNTLM},
 		{"case-insensitive", Options{AuthMethod: "SIMPLE"}, AuthSimple},
 		{"kerberos", Options{AuthMethod: "kerberos"}, AuthKerberos},
+		{"aes key implies kerberos", Options{AESKey: make([]byte, 16)}, AuthKerberos},
+		{"kcache implies kerberos", Options{UseKcache: true}, AuthKerberos},
 	}
 	for _, tc := range cases {
 		got, err := tc.o.EffectiveAuthMethod()
@@ -99,11 +101,54 @@ func TestValidateOptionsAuth(t *testing.T) {
 		t.Error("--hashes with simple bind must be rejected")
 	}
 
+	// Kerberos without a credential source is refused before any traffic.
 	krb := base
 	krb.AuthMethod = AuthKerberos
 	err := validateOptions(krb)
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Errorf("kerberos must fail loudly as not implemented, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no credentials") {
+		t.Errorf("kerberos without credentials must be refused, got %v", err)
+	}
+
+	// A password satisfies the Kerberos credential requirement (the specific
+	// bind still needs a real KDC, so it is exercised separately).
+	krbPw := krb
+	krbPw.Password = []byte("hunter2")
+	if err := validateOptions(krbPw); err != nil {
+		t.Errorf("kerberos with a password should validate: %v", err)
+	}
+
+	// Kerberos needs the DC hostname, not its address.
+	krbIP := krbPw
+	krbIP.Server = "10.0.0.5"
+	if err := validateOptions(krbIP); err == nil || !strings.Contains(err.Error(), "IP address") {
+		t.Errorf("kerberos against an IP --server must be refused, got %v", err)
+	}
+
+	// --use-kcache requires a ccache in the environment.
+	t.Setenv("KRB5CCNAME", "")
+	krbCache := base
+	krbCache.AuthMethod = AuthKerberos
+	krbCache.UseKcache = true
+	if err := validateOptions(krbCache); err == nil || !strings.Contains(err.Error(), "KRB5CCNAME") {
+		t.Errorf("--use-kcache without $KRB5CCNAME must be refused, got %v", err)
+	}
+	t.Setenv("KRB5CCNAME", "/tmp/krb5cc_test")
+	if err := validateOptions(krbCache); err != nil {
+		t.Errorf("--use-kcache with $KRB5CCNAME should validate: %v", err)
+	}
+
+	// AES key / ccache are Kerberos-only; naming another method is a mistake.
+	strayAES := base
+	strayAES.AuthMethod = AuthNTLM
+	strayAES.AESKey = make([]byte, 16)
+	if err := validateOptions(strayAES); err == nil {
+		t.Error("--aes-key with --auth-method ntlm must be refused")
+	}
+	strayCache := base
+	strayCache.AuthMethod = AuthSimple
+	strayCache.UseKcache = true
+	if err := validateOptions(strayCache); err == nil {
+		t.Error("--use-kcache with --auth-method simple must be refused")
 	}
 
 	unknown := base
