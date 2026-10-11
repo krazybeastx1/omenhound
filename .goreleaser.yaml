@@ -1,0 +1,66 @@
+# GoReleaser config — builds cross-platform release archives on a v* tag.
+# https://goreleaser.com
+version: 2
+
+project_name: omenhound
+
+before:
+  hooks:
+    - go vet ./...
+
+builds:
+  - id: omenhound
+    main: ./cmd/omenhound
+    binary: omenhound
+    flags:
+      - -trimpath
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/krazybeastx1/omenhound/internal/version.Version={{ .Version }}
+
+archives:
+  - id: omenhound
+    ids: [omenhound]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    **Full commit history**: https://github.com/krazybeastx1/omenhound/commits/{{ .Tag }}
+
+    Install with Go:
+
+    ```
+    go install github.com/krazybeastx1/omenhound/cmd/omenhound@{{ .Tag }}
+    ```

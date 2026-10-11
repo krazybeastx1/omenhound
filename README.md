@@ -53,6 +53,37 @@
 
 ---
 
+## Install
+
+Requires Go 1.26+ (newer Go releases fetch the toolchain automatically):
+
+```bash
+go install github.com/krazybeastx1/omenhound/cmd/omenhound@latest
+```
+
+The binary is written to `$(go env GOPATH)/bin` (usually `~/go/bin`). If that is
+not on your `PATH`:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
+omenhound version
+```
+
+Pin an exact release with `@v0.1.0` (any published tag works). Each
+[release](https://github.com/krazybeastx1/omenhound/releases) also ships prebuilt
+linux/macOS/Windows tarballs — with `checksums.txt` — for hosts without a Go
+toolchain.
+
+Or build from source:
+
+```bash
+git clone git@github.com:krazybeastx1/omenhound.git
+cd omenhound
+make build                     # -> bin/omenhound
+```
+
+---
+
 ## What it is
 
 OmenHound is a from-scratch Go implementation of the BloodHound model:

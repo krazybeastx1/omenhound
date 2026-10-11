@@ -70,7 +70,7 @@ func run(args []string) int {
 	case "export":
 		return cmdExport(args[1:])
 	case "version", "-v", "--version":
-		fmt.Println("omenhound", version.Version)
+		fmt.Println("omenhound", version.String())
 		return 0
 	case "help", "-h", "--help":
 		usage()
@@ -255,7 +255,7 @@ func cmdCollect(args []string) int {
 		log.Printf("collect: %v", err)
 		return 1
 	}
-	g.Meta.Version = version.Version
+	g.Meta.Version = version.String()
 	for _, w := range g.Meta.Warnings {
 		log.Printf("collect: WARNING: %s", w)
 	}
@@ -455,7 +455,7 @@ func cmdServe(args []string) int {
 		StoreIface:            store,
 		Creds:                 credStore,
 		Audit:                 auditLogger,
-		Version:               version.Version,
+		Version:               version.String(),
 		APIToken:              *apiToken,
 		EnableCredentialOps:   *enableOps,
 		ActServer:             *server,

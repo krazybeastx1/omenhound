@@ -34,6 +34,12 @@ collector ──Graph JSON──▶ ingest ──▶ Store ──▶ Neo4j (Bloo
 | Keep using `bloodhound-ce-python` | **[Coming from BloodHound.py](Coming-from-BloodHound-py)** |
 | See what is next | **[Roadmap](Roadmap)** |
 
+Install it with Go 1.26+:
+
+```bash
+go install github.com/krazybeastx1/omenhound/cmd/omenhound@latest
+```
+
 ---
 
 ## What it is (in one table)

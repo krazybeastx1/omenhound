@@ -12,7 +12,21 @@
 Everything is dependency-free at runtime: the web UI is embedded in the binary, there
 is no build step for the frontend, and no CDN is used.
 
-## Build
+## Install
+
+With Go 1.26+:
+
+```bash
+go install github.com/krazybeastx1/omenhound/cmd/omenhound@latest
+# binary -> "$(go env GOPATH)/bin/omenhound"; add that dir to PATH if needed
+omenhound version
+```
+
+Pin a release with `@v0.1.0`. Prebuilt linux/macOS/Windows archives (with
+`checksums.txt`) are attached to each
+[release](https://github.com/krazybeastx1/omenhound/releases).
+
+## Build from source
 
 ```bash
 git clone git@github.com:krazybeastx1/omenhound.git
