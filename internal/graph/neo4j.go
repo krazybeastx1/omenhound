@@ -455,6 +455,44 @@ func (s *Neo4jStore) Domains(ctx context.Context) ([]string, error) {
 	return ds, nil
 }
 
+// Trusts implements Store.
+func (s *Neo4jStore) Trusts(ctx context.Context) ([]Trust, error) {
+	session := s.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: s.database, AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+	v, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		r, err := tx.Run(ctx, "MATCH (a)-[r:Trusts|trust]->(b) RETURN a.id AS src, b.id AS tgt, type(r) AS kind, r.transitive AS transitive, r.sid_filtering AS sid_filtering", nil)
+		if err != nil {
+			return nil, err
+		}
+		var out []Trust
+		for r.Next(ctx) {
+			rec := r.Record()
+			out = append(out, Trust{
+				Source:       asString(rec, "src"),
+				Target:       asString(rec, "tgt"),
+				Type:         asString(rec, "kind"),
+				Transitive:   asBool(rec, "transitive"),
+				SIDFiltering: asBool(rec, "sid_filtering"),
+			})
+		}
+		return out, r.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	ts, _ := v.([]Trust)
+	return ts, nil
+}
+
+func asBool(rec *neo4j.Record, key string) bool {
+	v, ok := rec.Get(key)
+	if !ok || v == nil {
+		return false
+	}
+	b, _ := v.(bool)
+	return b
+}
+
 // SearchNodes implements Store.
 func (s *Neo4jStore) SearchNodes(ctx context.Context, q string, kind model.Kind, domain string, limit, offset int) ([]model.Node, int, error) {
 	session := s.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: s.database, AccessMode: neo4j.AccessModeRead})

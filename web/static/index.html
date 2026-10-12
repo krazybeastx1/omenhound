@@ -13,8 +13,8 @@
     <div class="brand"><span class="mark">◈</span> OmenHound</div>
     <button class="sidebar-toggle" id="sidebarToggle" aria-label="Collapse sidebar" title="Collapse sidebar">◀</button>
     <nav class="nav" id="nav">
-      <button class="nav-btn active" data-view="overview" aria-label="Overview">Overview</button>
-      <button class="nav-btn" data-view="graph" aria-label="Graph Explorer">Graph Explorer</button>
+      <button class="nav-btn" data-view="overview" aria-label="Overview">Overview</button>
+      <button class="nav-btn active" data-view="graph" aria-label="Graph Explorer">Graph Explorer</button>
       <div class="nav-divider"></div>
       <button class="nav-btn" data-view="domains" aria-label="Domains">Domains</button>
       <button class="nav-btn" data-view="users" aria-label="Users">Users</button>
@@ -57,7 +57,7 @@
 
     <main class="content" role="main">
       <!-- Overview -->
-      <section id="view-overview" class="view active" aria-labelledby="overview-title">
+      <section id="view-overview" class="view" aria-labelledby="overview-title">
         <div class="card">
           <h2 id="overview-title">Overview</h2>
           <div id="overviewGrid" class="overview-grid"></div>
@@ -69,7 +69,7 @@
       </section>
 
       <!-- Graph Explorer -->
-      <section id="view-graph" class="view" aria-labelledby="graph-title">
+      <section id="view-graph" class="view active" aria-labelledby="graph-title">
         <div class="graph-wrap">
           <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
             <div class="toolbar-group">

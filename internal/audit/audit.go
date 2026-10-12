@@ -57,12 +57,14 @@ func isSensitive(key string) bool {
 // Logger serialises events as JSON lines to an io.Writer. It is safe for
 // concurrent use.
 type Logger struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu        sync.Mutex
+	w         io.Writer
+	events    []Event
+	maxEvents int
 }
 
 // New returns a Logger writing JSON lines to w.
-func New(w io.Writer) *Logger { return &Logger{w: w} }
+func New(w io.Writer) *Logger { return &Logger{w: w, maxEvents: 1000} }
 
 // Log writes one event. Fields are redacted first.
 func (l *Logger) Log(e Event) error {
@@ -77,6 +79,28 @@ func (l *Logger) Log(e Event) error {
 	b = append(b, '\n')
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, err = l.w.Write(b)
+	if l.w != nil {
+		_, err = l.w.Write(b)
+	}
+	// Keep in-memory ring buffer
+	l.events = append(l.events, e)
+	if len(l.events) > l.maxEvents {
+		l.events = l.events[len(l.events)-l.maxEvents:]
+	}
 	return err
+}
+
+// GetEvents returns the last n events (most recent first).
+func (l *Logger) GetEvents(n int) []Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n <= 0 || n > len(l.events) {
+		n = len(l.events)
+	}
+	out := make([]Event, n)
+	// Return most recent first
+	for i := 0; i < n; i++ {
+		out[i] = l.events[len(l.events)-1-i]
+	}
+	return out
 }

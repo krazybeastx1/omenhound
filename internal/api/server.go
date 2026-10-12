@@ -106,6 +106,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/v1/edges", s.handleEdges)
 	mux.HandleFunc("GET /api/v1/domains", s.handleDomains)
+	mux.HandleFunc("GET /api/v1/trusts", s.handleTrusts)
+	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/v1/objects", s.handleObjects)
 	mux.HandleFunc("GET /api/v1/nodes/{id}", s.handleNode)
 	mux.HandleFunc("GET /api/v1/objects/{id}", s.handleObject)
@@ -482,6 +484,26 @@ func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"domains": domains})
+}
+
+func (s *Server) handleTrusts(w http.ResponseWriter, r *http.Request) {
+	trusts, err := s.store.Trusts(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"trusts": trusts})
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	events := s.audit.GetEvents(limit)
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *Server) handleObjects(w http.ResponseWriter, r *http.Request) {

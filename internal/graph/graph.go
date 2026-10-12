@@ -46,6 +46,8 @@ type Store interface {
 	SearchNodes(ctx context.Context, q string, kind model.Kind, domain string, limit, offset int) ([]model.Node, int, error)
 	// Domains returns all distinct domains present in the graph.
 	Domains(ctx context.Context) ([]string, error)
+	// Trusts returns all trust relationships in the graph.
+	Trusts(ctx context.Context) ([]Trust, error)
 	// ShortestPaths returns a limited set of shortest paths from source to target.
 	ShortestPaths(ctx context.Context, req ShortestPathRequest) (ShortestPathResult, error)
 	// Close releases backend resources.
@@ -54,6 +56,15 @@ type Store interface {
 
 // Direction indicates graph traversal direction for relationships.
 type Direction int
+
+// Trust represents a domain trust relationship.
+type Trust struct {
+	Source       string `json:"source"`
+	Target       string `json:"target"`
+	Type         string `json:"type"`
+	Transitive   bool   `json:"transitive"`
+	SIDFiltering bool   `json:"sid_filtering"`
+}
 
 const (
 	// Outgoing traverses edges in their stored direction (source -> target).

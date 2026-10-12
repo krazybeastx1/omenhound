@@ -230,6 +230,28 @@ func (m *Memory) Domains(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
+// Trusts implements Store.
+func (m *Memory) Trusts(_ context.Context) ([]Trust, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Trust
+	for _, e := range m.edges {
+		if e.Kind == "Trusts" || e.Kind == "trust" {
+			out = append(out, Trust{
+				Source:       e.Source,
+				Target:       e.Target,
+				Type:         string(e.Kind),
+				Transitive:   e.Props != nil && e.Props["transitive"] == "true",
+				SIDFiltering: e.Props != nil && e.Props["sid_filtering"] == "true",
+			})
+		}
+	}
+	if out == nil {
+		out = []Trust{}
+	}
+	return out, nil
+}
+
 // Close implements Store.
 func (m *Memory) Close(context.Context) error { return nil }
 
