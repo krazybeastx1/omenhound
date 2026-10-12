@@ -4,107 +4,141 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OmenHound</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%0A%20%20%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2212%22%20fill%3D%22%230b0e14%22%2F%3E%0A%20%20%3Ctext%20x%3D%2232%22%20y%3D%2238%22%20font-size%3D%2228%22%20text-anchor%3D%22middle%22%20fill%3D%22%237aa2ff%22%20font-family%3D%22ui-sans-serif%2Csystem-ui%22%3E%E2%97%88%3C%2Ftext%3E%0A%3C%2Fsvg%3E%0A" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
 <div class="layout">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar" role="navigation" aria-label="Main navigation">
     <div class="brand"><span class="mark">◈</span> OmenHound</div>
-    <nav class="nav">
-      <button class="nav-btn active" data-view="overview">Overview</button>
-      <button class="nav-btn" data-view="domains">Domains</button>
-      <button class="nav-btn" data-view="users">Users</button>
-      <button class="nav-btn" data-view="groups">Groups</button>
-      <button class="nav-btn" data-view="computers">Computers</button>
-      <button class="nav-btn" data-view="ous">OUs</button>
-      <button class="nav-btn" data-view="graph">Graph Explorer</button>
-      <button class="nav-btn" data-view="paths">Path Explorer</button>
-      <button class="nav-btn" data-view="imports">Imports</button>
+    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Collapse sidebar" title="Collapse sidebar">◀</button>
+    <nav class="nav" id="nav">
+      <button class="nav-btn active" data-view="overview" aria-label="Overview">Overview</button>
+      <button class="nav-btn" data-view="graph" aria-label="Graph Explorer">Graph Explorer</button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-view="domains" aria-label="Domains">Domains</button>
+      <button class="nav-btn" data-view="users" aria-label="Users">Users</button>
+      <button class="nav-btn" data-view="groups" aria-label="Groups">Groups</button>
+      <button class="nav-btn" data-view="computers" aria-label="Computers">Computers</button>
+      <button class="nav-btn" data-view="ous" aria-label="Organizational Units">Organizational Units</button>
+      <button class="nav-btn" data-view="gpos" aria-label="GPOs">GPOs</button>
+      <button class="nav-btn" data-view="containers" aria-label="Containers">Containers</button>
+      <button class="nav-btn" data-view="trusts" aria-label="Trusts">Trusts</button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-view="relationships" aria-label="Relationships">Relationships</button>
+      <button class="nav-btn" data-view="paths" aria-label="Path Explorer">Path Explorer</button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-view="ingestion" aria-label="Ingestion">Ingestion</button>
+      <button class="nav-btn" data-view="collection" aria-label="Collection Guidance">Collection Guidance</button>
+      <button class="nav-btn" data-view="audit" aria-label="Audit">Audit</button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-view="settings" aria-label="Settings">Settings</button>
     </nav>
   </aside>
   <div class="main">
-    <header class="topbar">
-      <div class="stats" id="stats">loading…</div>
-      <div class="spacer"></div>
-      <select id="domainSelect"><option value="">All Domains</option></select>
-      <input id="search" type="search" placeholder="filter by name / sAMAccountName / SID" autocomplete="off" />
-      <button id="push" class="lock" title="graph-modifying endpoints require an operator token">🔒 Write API</button>
-      <button id="reload" title="reload graph">Reload</button>
+    <header class="topbar" role="banner">
+      <div class="topbar-left">
+        <div class="stats" id="stats" aria-live="polite">loading…</div>
+        <div class="stats muted" id="health" aria-live="polite">loading…</div>
+      </div>
+      <div class="topbar-center">
+        <div class="search-wrap">
+          <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="1.5"/></svg>
+          <input id="search" type="search" placeholder="Search by name, sAMAccountName, SID…" autocomplete="off" aria-label="Global search" />
+          <button id="searchClear" class="search-clear" aria-label="Clear search" hidden>✕</button>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <select id="domainSelect" aria-label="Filter by domain"><option value="">All Domains</option></select>
+        <button id="push" class="lock" title="Graph-modifying endpoints require an operator token" aria-label="Write API gate">🔒 Write API</button>
+        <button id="reload" title="Reload graph" aria-label="Reload graph">⟳</button>
+      </div>
     </header>
 
-    <main class="content">
-      <section id="view-overview" class="view active">
+    <main class="content" role="main">
+      <!-- Overview -->
+      <section id="view-overview" class="view active" aria-labelledby="overview-title">
         <div class="card">
-          <h2>Overview</h2>
-          <p class="muted">Select a domain or browse objects from the sidebar.</p>
+          <h2 id="overview-title">Overview</h2>
+          <div id="overviewGrid" class="overview-grid"></div>
+        </div>
+        <div class="card" id="recentActivityCard" hidden>
+          <h3>Recent Activity</h3>
+          <div id="recentActivity" class="activity-list"></div>
         </div>
       </section>
 
-      <section id="view-domains" class="view">
-        <div class="card">
-          <h2>Domains</h2>
-          <div id="domainsList" class="list"></div>
-        </div>
-      </section>
-
-      <section id="view-users" class="view">
-        <div class="card">
-          <h2>Users</h2>
-          <div class="toolbar"><input id="userSearch" type="search" placeholder="search users" /></div>
-          <table class="table" id="usersTable"></table>
-          <div class="pagination" id="usersPage"></div>
-        </div>
-      </section>
-
-      <section id="view-groups" class="view">
-        <div class="card">
-          <h2>Groups</h2>
-          <div class="toolbar"><input id="groupSearch" type="search" placeholder="search groups" /></div>
-          <table class="table" id="groupsTable"></table>
-          <div class="pagination" id="groupsPage"></div>
-        </div>
-      </section>
-
-      <section id="view-computers" class="view">
-        <div class="card">
-          <h2>Computers</h2>
-          <div class="toolbar"><input id="compSearch" type="search" placeholder="search computers" /></div>
-          <table class="table" id="compsTable"></table>
-          <div class="pagination" id="compsPage"></div>
-        </div>
-      </section>
-
-      <section id="view-ous" class="view">
-        <div class="card">
-          <h2>Organizational Units</h2>
-          <div class="toolbar"><input id="ouSearch" type="search" placeholder="search OUs" /></div>
-          <table class="table" id="ousTable"></table>
-          <div class="pagination" id="ousPage"></div>
-        </div>
-      </section>
-
-      <section id="view-graph" class="view">
+      <!-- Graph Explorer -->
+      <section id="view-graph" class="view" aria-labelledby="graph-title">
         <div class="graph-wrap">
-          <canvas id="graph"></canvas>
-          <aside class="panel" id="panel">
+          <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
+            <div class="toolbar-group">
+              <button id="fitView" class="icon-btn" title="Fit to view" aria-label="Fit to view">⛶</button>
+              <button id="resetView" class="icon-btn" title="Reset view" aria-label="Reset view">⟲</button>
+              <button id="centerSelection" class="icon-btn" title="Center selection" aria-label="Center selection" disabled>⌖</button>
+            </div>
+            <div class="toolbar-group">
+              <label class="icon-btn" title="Node labels" aria-label="Toggle node labels"><input type="checkbox" id="showLabels" checked> Labels</label>
+              <label class="icon-btn" title="Edge labels" aria-label="Toggle edge labels"><input type="checkbox" id="showEdgeLabels"> Edge Labels</label>
+            </div>
+            <div class="toolbar-group">
+              <label class="icon-btn" title="Show legend" aria-label="Toggle legend"><input type="checkbox" id="showLegend" checked> Legend</label>
+            </div>
+            <div class="toolbar-group filter-group">
+              <span class="muted small">Filters:</span>
+              <select id="nodeKindFilter" aria-label="Filter by node kind"><option value="">All Types</option></select>
+              <select id="edgeKindFilter" aria-label="Filter by relationship type"><option value="">All Relationships</option></select>
+            </div>
+          </div>
+          <canvas id="graph" aria-label="Attack path graph" role="img"></canvas>
+          <aside class="panel" id="panel" role="complementary" aria-label="Inspector">
+            <div class="panel-header">
+              <h2 id="panelTitle">Inspector</h2>
+              <button id="panelClose" class="icon-btn" title="Close panel" aria-label="Close panel">✕</button>
+            </div>
             <div class="panel-empty" id="panel-empty">
+              <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.3"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.3"/></svg>
               <h2>Select a node or edge</h2>
-              <p>Click a node to inspect it, or click an edge for details.</p>
+              <p>Click a node to inspect it, or click an edge for abuse details.</p>
             </div>
             <section class="panel-body" id="panel-node" hidden>
               <h2 id="node-title"></h2>
               <dl id="node-props"></dl>
-              <h3>Outgoing</h3>
-              <ul id="node-out" class="edges"></ul>
-              <h3>Incoming</h3>
-              <ul id="node-in" class="edges"></ul>
+              <div class="panel-section">
+                <h3>Outgoing <span id="nodeOutCount" class="count"></span></h3>
+                <ul id="node-out" class="edges" role="list"></ul>
+              </div>
+              <div class="panel-section">
+                <h3>Incoming <span id="nodeInCount" class="count"></span></h3>
+                <ul id="node-in" class="edges" role="list"></ul>
+              </div>
+              <div class="panel-actions">
+                <button id="openInGraph" class="primary" disabled>Open in Graph</button>
+              </div>
             </section>
             <section class="panel-body" id="panel-edge" hidden>
-              <h2>Edge</h2>
+              <h2 id="edge-title">Edge</h2>
+              <p id="edge-summary" class="muted"></p>
               <dl id="edge-props"></dl>
-              <section id="abuse" class="abuse" hidden>
-                <h3>Dynamic abuse commands</h3>
-                <div id="abuse-list"></div>
+              <section class="abuse">
+                <h3>Dynamic Abuse Commands</h3>
+                <div class="command-block">
+                  <pre id="edge-command">loading…</pre>
+                  <button class="copy-btn" id="copyCommand" title="Copy command" aria-label="Copy command">📋</button>
+                </div>
+                <div id="edge-alts-wrap" hidden>
+                  <h3>Alternates</h3>
+                  <div class="command-block">
+                    <pre id="edge-alts"></pre>
+                    <button class="copy-btn" id="copyAlts" title="Copy alternates" aria-label="Copy alternates">📋</button>
+                  </div>
+                </div>
+                <h3>OPSEC</h3>
+                <pre id="edge-opsec"></pre>
+                <h3>Events</h3>
+                <pre id="edge-events"></pre>
+                <h3>Warnings</h3>
+                <pre id="edge-warnings"></pre>
                 <p class="muted small">OPSEC note: commands depend on collected data; test in authorized lab.</p>
               </section>
             </section>
@@ -112,56 +146,402 @@
         </div>
       </section>
 
-      <section id="view-paths" class="view">
+      <!-- Domains -->
+      <section id="view-domains" class="view" aria-labelledby="domains-title">
         <div class="card">
-          <h2>Path Explorer</h2>
+          <h2 id="domains-title">Domains</h2>
+          <div class="toolbar"><input id="domainSearch" type="search" placeholder="Filter domains…" aria-label="Filter domains" /></div>
+          <div id="domainsList" class="list" role="list"></div>
+        </div>
+      </section>
+
+      <!-- Users -->
+      <section id="view-users" class="view" aria-labelledby="users-title">
+        <div class="card">
+          <h2 id="users-title">Users</h2>
+          <div class="toolbar">
+            <input id="userSearch" type="search" placeholder="Search users…" aria-label="Search users" />
+            <select id="userSort" aria-label="Sort by"><option value="name">Name</option><option value="sam">SAM Account</option><option value="domain">Domain</option><option value="sid">SID</option></select>
+            <select id="userEnabledFilter" aria-label="Filter by enabled"><option value="">All</option><option value="true">Enabled</option><option value="false">Disabled</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="usersTable" role="grid">
+              <thead><tr><th>Name</th><th>SAM</th><th>Domain</th><th>Enabled</th><th>SID</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="usersPage" role="navigation" aria-label="Users pagination"></div>
+        </div>
+      </section>
+
+      <!-- Groups -->
+      <section id="view-groups" class="view" aria-labelledby="groups-title">
+        <div class="card">
+          <h2 id="groups-title">Groups</h2>
+          <div class="toolbar">
+            <input id="groupSearch" type="search" placeholder="Search groups…" aria-label="Search groups" />
+            <select id="groupSort" aria-label="Sort by"><option value="name">Name</option><option value="domain">Domain</option><option value="sid">SID</option></select>
+            <select id="groupTypeFilter" aria-label="Filter by type"><option value="">All Types</option><option value="security">Security</option><option value="distribution">Distribution</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="groupsTable" role="grid">
+              <thead><tr><th>Name</th><th>Type</th><th>Domain</th><th>Members</th><th>SID</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="groupsPage" role="navigation" aria-label="Groups pagination"></div>
+        </div>
+      </section>
+
+      <!-- Computers -->
+      <section id="view-computers" class="view" aria-labelledby="computers-title">
+        <div class="card">
+          <h2 id="computers-title">Computers</h2>
+          <div class="toolbar">
+            <input id="compSearch" type="search" placeholder="Search computers…" aria-label="Search computers" />
+            <select id="compSort" aria-label="Sort by"><option value="name">Name</option><option value="domain">Domain</option><option value="os">OS</option><option value="sid">SID</option></select>
+            <select id="compOsFilter" aria-label="Filter by OS"><option value="">All OS</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="compsTable" role="grid">
+              <thead><tr><th>Name</th><th>Domain</th><th>OS</th><th>SID</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="compsPage" role="navigation" aria-label="Computers pagination"></div>
+        </div>
+      </section>
+
+      <!-- OUs -->
+      <section id="view-ous" class="view" aria-labelledby="ous-title">
+        <div class="card">
+          <h2 id="ous-title">Organizational Units</h2>
+          <div class="toolbar">
+            <input id="ouSearch" type="search" placeholder="Search OUs…" aria-label="Search OUs" />
+            <select id="ouSort" aria-label="Sort by"><option value="name">Name</option><option value="domain">Domain</option><option value="dn">DN</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="ousTable" role="grid">
+              <thead><tr><th>Name</th><th>Domain</th><th>Distinguished Name</th><th>SID</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="ousPage" role="navigation" aria-label="OUs pagination"></div>
+        </div>
+      </section>
+
+      <!-- GPOs -->
+      <section id="view-gpos" class="view" aria-labelledby="gpos-title">
+        <div class="card">
+          <h2 id="gpos-title">Group Policy Objects</h2>
+          <div class="toolbar">
+            <input id="gpoSearch" type="search" placeholder="Search GPOs…" aria-label="Search GPOs" />
+            <select id="gpoSort" aria-label="Sort by"><option value="name">Name</option><option value="domain">Domain</option><option value="guid">GUID</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="gposTable" role="grid">
+              <thead><tr><th>Name</th><th>Domain</th><th>GUID</th><th>SID</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="gposPage" role="navigation" aria-label="GPOs pagination"></div>
+        </div>
+      </section>
+
+      <!-- Containers -->
+      <section id="view-containers" class="view" aria-labelledby="containers-title">
+        <div class="card">
+          <h2 id="containers-title">Containers</h2>
+          <div class="toolbar">
+            <input id="containerSearch" type="search" placeholder="Search containers…" aria-label="Search containers" />
+            <select id="containerSort" aria-label="Sort by"><option value="name">Name</option><option value="domain">Domain</option><option value="dn">DN</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="containersTable" role="grid">
+              <thead><tr><th>Name</th><th>Domain</th><th>Distinguished Name</th><th>SID</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="containersPage" role="navigation" aria-label="Containers pagination"></div>
+        </div>
+      </section>
+
+      <!-- Trusts -->
+      <section id="view-trusts" class="view" aria-labelledby="trusts-title">
+        <div class="card">
+          <h2 id="trusts-title">Trusts</h2>
+          <div class="toolbar">
+            <input id="trustSearch" type="search" placeholder="Search trusts…" aria-label="Search trusts" />
+            <select id="trustSort" aria-label="Sort by"><option value="source">Source Domain</option><option value="target">Target Domain</option><option value="type">Trust Type</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="trustsTable" role="grid">
+              <thead><tr><th>Source Domain</th><th>Target Domain</th><th>Type</th><th>Transitive</th><th>SID Filtering</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Relationships -->
+      <section id="view-relationships" class="view" aria-labelledby="relationships-title">
+        <div class="card">
+          <h2 id="relationships-title">Relationships</h2>
+          <div class="toolbar">
+            <input id="relSearch" type="search" placeholder="Search relationships…" aria-label="Search relationships" />
+            <select id="relKindFilter" aria-label="Filter by kind"><option value="">All Types</option></select>
+            <select id="relSort" aria-label="Sort by"><option value="kind">Type</option><option value="source">Source</option><option value="target">Target</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="relsTable" role="grid">
+              <thead><tr><th>Type</th><th>Source</th><th>Target</th><th>Properties</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="relsPage" role="navigation" aria-label="Relationships pagination"></div>
+        </div>
+      </section>
+
+      <!-- Path Explorer -->
+      <section id="view-paths" class="view" aria-labelledby="paths-title">
+        <div class="card">
+          <h2 id="paths-title">Path Explorer</h2>
           <div class="grid-2">
             <div>
               <label>Source</label>
-              <input id="pathSrc" placeholder="search source object" />
-              <div id="pathSrcRes" class="suggest"></div>
+              <input id="pathSrc" placeholder="Search source object" aria-label="Source object" autocomplete="off" />
+              <div id="pathSrcRes" class="suggest" role="listbox"></div>
             </div>
             <div>
               <label>Destination</label>
-              <input id="pathDst" placeholder="search destination object" />
-              <div id="pathDstRes" class="suggest"></div>
+              <input id="pathDst" placeholder="Search destination object" aria-label="Destination object" autocomplete="off" />
+              <div id="pathDstRes" class="suggest" role="listbox"></div>
             </div>
           </div>
-          <div class="grid-3">
+          <div class="grid-4">
             <div>
               <label>Max Depth</label>
-              <input id="pathDepth" type="number" value="5" min="1" max="10" />
+              <input id="pathDepth" type="number" value="5" min="1" max="10" aria-label="Max depth" />
             </div>
             <div>
               <label>Max Paths</label>
-              <input id="pathMax" type="number" value="10" min="1" max="50" />
+              <input id="pathMax" type="number" value="10" min="1" max="50" aria-label="Max paths" />
             </div>
             <div>
               <label>Direction</label>
-              <select id="pathDir">
+              <select id="pathDir" aria-label="Direction">
                 <option value="outgoing">Outgoing</option>
                 <option value="undirected">Undirected</option>
                 <option value="incoming">Incoming</option>
               </select>
             </div>
+            <div>
+              <label>Algorithm</label>
+              <select id="pathAlgo" aria-label="Algorithm">
+                <option value="bfs">BFS (Shortest)</option>
+                <option value="dijkstra">Dijkstra (Weighted)</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid-4">
+            <div>
+              <label>Node Types</label>
+              <select id="pathIncludeNodes" multiple aria-label="Include node types"></select>
+            </div>
+            <div>
+              <label>Exclude Node Types</label>
+              <select id="pathExcludeNodes" multiple aria-label="Exclude node types"></select>
+            </div>
+            <div>
+              <label>Relationship Types</label>
+              <select id="pathIncludeRels" multiple aria-label="Include relationship types"></select>
+            </div>
+            <div>
+              <label>Exclude Rel Types</label>
+              <select id="pathExcludeRels" multiple aria-label="Exclude relationship types"></select>
+            </div>
           </div>
           <div class="toolbar">
-            <button id="pathSearch">Search Paths</button>
+            <button id="pathSearch" class="primary">Search Paths</button>
             <button id="pathClear">Clear</button>
           </div>
-          <div id="pathResults" class="path-list"></div>
+          <div id="pathResults" class="path-list" role="list"></div>
         </div>
       </section>
 
-      <section id="view-imports" class="view">
+      <!-- Ingestion -->
+      <section id="view-ingestion" class="view" aria-labelledby="ingestion-title">
         <div class="card">
-          <h2>Imports</h2>
-          <p class="muted">Use ingest API via Write API toggle.</p>
+          <h2 id="ingestion-title">Graph Ingestion</h2>
+          <div class="ingestion-tabs">
+            <button class="tab-btn active" data-tab="web">Web Upload</button>
+            <button class="tab-btn" data-tab="cli">CLI / API Guidance</button>
+          </div>
+          <div class="tab-panel" id="tab-web">
+            <p class="muted">Upload a Graph JSON file to ingest into the server. Requires Write API token.</p>
+            <div class="field">
+              <label>Graph JSON File</label>
+              <input type="file" id="ingestFile" accept=".json" aria-label="Graph JSON file" />
+            </div>
+            <div class="field">
+              <label>Operator Token</label>
+              <input id="ingestToken" type="password" placeholder="omh_xxx" autocomplete="off" aria-label="Operator token" />
+            </div>
+            <div id="ingestStatus" class="muted"></div>
+            <div class="modal-actions">
+              <button id="ingestSubmit" class="primary">Ingest Graph</button>
+            </div>
+            <details class="ingest-details">
+              <summary>Expected Graph JSON Format</summary>
+              <pre>{"nodes":[{"id":"S-1-...","kind":"User","name":"...","domain":"...","sam_account_name":"...","distinguished_name":"...","props":{}}],"edges":[{"source":"S-1-...","target":"S-1-...","kind":"GenericAll"}],"meta":{"collector":"ldap","version":"...","domain":"...","started_at":"...","finished_at":"..."}}</pre>
+            </details>
+          </div>
+          <div class="tab-panel" id="tab-cli" hidden>
+            <h3>Collector (LDAP + SMB)</h3>
+            <pre id="collectorCmd"></pre>
+            <button class="copy-btn" data-target="collectorCmd">📋 Copy</button>
+            <h3>Import BloodHound Archive</h3>
+            <pre id="importCmd"></pre>
+            <button class="copy-btn" data-target="importCmd">📋 Copy</button>
+            <h3>Push to Running Server</h3>
+            <pre id="pushCmd"></pre>
+            <button class="copy-btn" data-target="pushCmd">📋 Copy</button>
+            <h3>Serve with Neo4j</h3>
+            <pre id="serveCmd"></pre>
+            <button class="copy-btn" data-target="serveCmd">📋 Copy</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Collection Guidance -->
+      <section id="view-collection" class="view" aria-labelledby="collection-title">
+        <div class="card">
+          <h2 id="collection-title">Collection &amp; Enumeration Guidance</h2>
+          <div class="collection-grid">
+            <article class="collection-card">
+              <h3>LDAP Collection</h3>
+              <ul>
+                <li><code>-c group</code> — Users, groups, computers, membership</li>
+                <li><code>-c objectprops</code> — Extended properties (SPNs, OS, etc.)</li>
+                <li><code>-c acl</code> — Security descriptors → ACL edges</li>
+                <li><code>-c container</code> — OUs, GPOs, containers, GPLinks</li>
+                <li><code>-c trusts</code> — Domain trusts</li>
+              </ul>
+            </article>
+            <article class="collection-card">
+              <h3>SMB/RPC Collection</h3>
+              <ul>
+                <li><code>-c session</code> — Active sessions (HasSession)</li>
+                <li><code>-c localadmin</code> — Local admins (AdminTo)</li>
+                <li><code>-c rdp</code> — RDP access (CanRDP)</li>
+                <li><code>-c dcom</code> — DCOM execution (ExecuteDCOM)</li>
+                <li><code>-c psremote</code> — WinRM/PSRemoting (CanPSRemote)</li>
+                <li><code>-c loggedon</code> — Logged-on users (HasSession)</li>
+              </ul>
+            </article>
+            <article class="collection-card">
+              <h3>Authentication</h3>
+              <ul>
+                <li>Simple bind (default) — DN/UPN + password</li>
+                <li><code>--auth-method ntlm</code> — NTLMSSP bind</li>
+                <li><code>--hashes NT</code> — Pass-the-hash (NTLM)</li>
+                <li><code>-k</code> / <code>--auth-method kerberos</code> — Kerberos (password, hash, AES, ccache)</li>
+              </ul>
+            </article>
+            <article class="collection-card">
+              <h3>Key Flags</h3>
+              <ul>
+                <li><code>--ldaps</code> — Enforce LDAPS (required for writes)</li>
+                <li><code>--password-stdin</code> — Read password from stdin</li>
+                <li><code>--zip</code> — Output BloodHound CE v5 archive</li>
+                <li><code>--out file.json</code> — Output Graph JSON</li>
+                <li><code>--push http://host:8080</code> — Push directly to server</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- Audit -->
+      <section id="view-audit" class="view" aria-labelledby="audit-title">
+        <div class="card">
+          <h2 id="audit-title">Audit Log</h2>
+          <p class="muted">Audit records are available via the API when authentication is configured.</p>
+          <div class="toolbar">
+            <button id="auditRefresh" class="primary">Refresh</button>
+            <select id="auditLimit" aria-label="Limit"><option value="50">50</option><option value="100">100</option><option value="200">200</option></select>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="auditTable" role="grid">
+              <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th><th>Reason</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="view-settings" class="view" aria-labelledby="settings-title">
+        <div class="card">
+          <h2 id="settings-title">Settings</h2>
+          <div class="settings-grid">
+            <fieldset>
+              <legend>Graph Rendering</legend>
+              <label><input type="checkbox" id="settingLabels" checked> Node labels</label>
+              <label><input type="checkbox" id="settingEdgeLabels"> Edge labels</label>
+              <label><input type="checkbox" id="settingLegend" checked> Legend</label>
+              <label><input type="checkbox" id="settingPhysics" checked> Physics simulation</label>
+              <label><input type="checkbox" id="settingReduceMotion" checked> Reduce motion</label>
+            </fieldset>
+            <fieldset>
+              <legend>Data &amp; Performance</legend>
+              <label><input type="checkbox" id="settingAutoRefresh" checked> Auto-refresh on ingest</label>
+              <label><input type="checkbox" id="settingPreserveSelection" checked> Preserve selection on refresh</label>
+              <label>Graph refresh interval (seconds): <input type="number" id="settingRefreshInterval" value="0" min="0" max="3600" style="width:60px"> (0 = off)</label>
+            </fieldset>
+            <fieldset>
+              <legend>Appearance</legend>
+              <label>Theme: <select id="settingTheme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label>
+              <label>Density: <select id="settingDensity"><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="spacious">Spacious</option></select></label>
+            </fieldset>
+          </div>
+          <div class="card" style="margin-top:16px">
+            <h3>About</h3>
+            <dl id="aboutInfo" class="about-dl"></dl>
+          </div>
         </div>
       </section>
     </main>
+
+    <footer class="foot" role="contentinfo">
+      <span id="footerLeft">OmenHound</span>
+      <span id="footerRight">v<span id="versionDisplay">-</span></span>
+    </footer>
   </div>
 </div>
+
+<!-- Write API Gate Modal -->
+<div id="gate" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="gate-title">
+  <div class="modal-card">
+    <h2 id="gate-title">Write API Gate</h2>
+    <p class="muted">Operator token required to use graph-modifying endpoints. Token is held in memory for this tab only.</p>
+    <label class="field"><span>Operator Token</span>
+      <input id="gate-token" type="password" placeholder="e.g. omh_xxx" autocomplete="off" aria-label="Operator token" />
+    </label>
+    <label class="field"><span>Graph JSON (ingest)</span>
+      <textarea id="gate-json" placeholder='{"nodes":[],"edges":[]}' aria-label="Graph JSON"></textarea>
+    </label>
+    <div id="gate-status" class="muted" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button id="gate-cancel">Cancel</button>
+      <button id="gate-push" class="primary">Push</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
 <script src="/app.js"></script>
 </body>
 </html>

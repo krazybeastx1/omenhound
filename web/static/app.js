@@ -348,15 +348,19 @@ function esc(s) {
 }
 
 // search highlight (dim non-matching)
-document.getElementById("search").addEventListener("input", (ev) => {
-  const q = ev.target.value.trim().toLowerCase();
-  for (const n of nodes) {
-    const hay = `${n.name || ""} ${n.sam_account_name || ""} ${n.id}`.toLowerCase();
-    n.dim = q !== "" && !hay.includes(q);
-  }
-  draw();
-});
-document.getElementById("reload").addEventListener("click", refresh);
+const searchEl = document.getElementById("search");
+if (searchEl) {
+  searchEl.addEventListener("input", (ev) => {
+    const q = ev.target.value.trim().toLowerCase();
+    for (const n of nodes) {
+      const hay = `${n.name || ""} ${n.sam_account_name || ""} ${n.id}`.toLowerCase();
+      n.dim = q !== "" && !hay.includes(q);
+    }
+    draw();
+  });
+}
+const reloadEl = document.getElementById("reload");
+if (reloadEl) reloadEl.addEventListener("click", refresh);
 
 // ---- write-API auth gate ----
 // The UI is read-only by default. Graph-modifying endpoints require an operator
@@ -366,80 +370,130 @@ const gate = document.getElementById("gate");
 
 function setLock(unlocked) {
   const b = document.getElementById("push");
+  if (!b) return;
   b.textContent = unlocked ? "🔓 Write API" : "🔒 Write API";
   b.classList.toggle("unlocked", unlocked);
 }
 
 function openGate() {
-  document.getElementById("gate-status").textContent = "";
-  gate.hidden = false;
-  document.getElementById("gate-token").focus();
-}
-function closeGate() { gate.hidden = true; }
-
-document.getElementById("push").addEventListener("click", openGate);
-document.getElementById("gate-cancel").addEventListener("click", closeGate);
-gate.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeGate(); });
-
-document.getElementById("gate-push").addEventListener("click", async () => {
-  const token = document.getElementById("gate-token").value.trim();
-  const body = document.getElementById("gate-json").value.trim();
+  if (!gate) return;
   const status = document.getElementById("gate-status");
-  if (!token || !body) {
-    status.className = "warn";
-    status.textContent = "an operator token and graph JSON are both required";
-    return;
-  }
-  status.className = "muted";
-  status.textContent = "pushing…";
-  try {
-    const res = await fetch("/api/v1/ingest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-      body,
-    });
-    const r = await res.json().catch(() => ({}));
-    if (!res.ok) {
+  if (status) status.textContent = "";
+  gate.hidden = false;
+  const tokenInput = document.getElementById("gate-token");
+  if (tokenInput) tokenInput.focus();
+}
+function closeGate() { if (gate) gate.hidden = true; }
+
+const pushBtn = document.getElementById("push");
+if (pushBtn) pushBtn.addEventListener("click", openGate);
+const gateCancel = document.getElementById("gate-cancel");
+if (gateCancel) gateCancel.addEventListener("click", closeGate);
+if (gate) {
+  gate.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeGate(); });
+}
+
+const gatePush = document.getElementById("gate-push");
+if (gatePush) {
+  gatePush.addEventListener("click", async () => {
+    const tokenEl = document.getElementById("gate-token");
+    const bodyEl = document.getElementById("gate-json");
+    const status = document.getElementById("gate-status");
+    const token = tokenEl ? tokenEl.value.trim() : "";
+    const body = bodyEl ? bodyEl.value.trim() : "";
+    if (!status) return;
+    if (!token || !body) {
       status.className = "warn";
-      status.textContent = `denied: ${r.error || res.statusText}`;
+      status.textContent = "an operator token and graph JSON are both required";
       return;
     }
-    operatorToken = token;
-    setLock(true);
     status.className = "muted";
-    status.textContent = `ok: ${r.nodes} nodes, ${r.edges} edges ingested`;
-    await refresh();
-  } catch (err) {
-    status.className = "warn";
-    status.textContent = "error: " + err.message;
-  }
-});
+    status.textContent = "pushing…";
+    try {
+      const res = await fetch("/api/v1/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body,
+      });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        status.className = "warn";
+        status.textContent = `denied: ${r.error || res.statusText}`;
+        return;
+      }
+      operatorToken = token;
+      setLock(true);
+      status.className = "muted";
+      status.textContent = `ok: ${r.nodes} nodes, ${r.edges} edges ingested`;
+      await refresh();
+    } catch (err) {
+      status.className = "warn";
+      status.textContent = "error: " + err.message;
+    }
+  });
+}
 
 async function refresh() {
-  await loadGraph();
-  try { await loadDomains(); } catch(e){}
-  const res = await fetch("/api/v1/health");
-  const h = await res.json();
-  document.getElementById("health").textContent =
-    `v${h.version} · credential-ops ${h.credential_ops_enabled ? "ON" : "off"} · write-api ${h.write_api_enabled ? "ON" : "off"}`;
+  try { await loadGraph(); } catch (e) {}
+  try { await loadDomains(); } catch (e) {}
+  try {
+    const res = await fetch("/api/v1/health");
+    if (res.ok) {
+      const h = await res.json();
+      const healthEl = document.getElementById("health");
+      if (healthEl) {
+        healthEl.textContent =
+          `v${h.version} · credential-ops ${h.credential_ops_enabled ? "ON" : "off"} · write-api ${h.write_api_enabled ? "ON" : "off"}`;
+      }
+    } else {
+      const healthEl = document.getElementById("health");
+      if (healthEl) healthEl.textContent = `health: ${res.status}`;
+    }
+  } catch (e) {
+    const healthEl = document.getElementById("health");
+    if (healthEl) healthEl.textContent = "health: error";
+  }
   setLock(!!operatorToken);
 }
 
-resize();
-refresh().then(loop);
+function init() {
+  try { resize(); } catch (e) {}
+  refresh().then(() => {
+    try { loop(); } catch (e) {}
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
 
 function setView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   if (name === 'graph') {
-    setTimeout(() => { resize(); tick(); }, 10);
+    setTimeout(() => { resize(); }, 10);
   }
-  try { if (name === 'domains') loadDomains(); else if (name === 'users') loadUsers(); else if (name === 'groups') loadGroups(); else if (name === 'computers') loadComputers(); else if (name === 'ous') loadOUs(); loadDomains(); } catch(e){}
+  try {
+    if (name === 'domains') loadDomains();
+    else if (name === 'users') loadUsers();
+    else if (name === 'groups') loadGroups();
+    else if (name === 'computers') loadComputers();
+    else if (name === 'ous') loadOUs();
+  } catch (e) {}
 }
 
-document.querySelectorAll('.nav-btn').forEach(b => {
-  b.addEventListener('click', () => setView(b.dataset.view));
-});
+function attachNav() {
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    b.removeEventListener('click', navClick);
+    b.addEventListener('click', navClick);
+  });
+}
+function navClick() {
+  setView(this.dataset.view);
+}
+attachNav();
 
 async function loadDomains() {
   try {
@@ -469,13 +523,18 @@ async function loadObjects(type, opts = {}) {
 
 let currentDomain = '';
 
-document.getElementById('domainSelect').addEventListener('change', e => {
-  currentDomain = e.target.value;
-  if (document.querySelector('.nav-btn.active').dataset.view === 'users') loadUsers();
-  if (document.querySelector('.nav-btn.active').dataset.view === 'groups') loadGroups();
-  if (document.querySelector('.nav-btn.active').dataset.view === 'computers') loadComputers();
-  if (document.querySelector('.nav-btn.active').dataset.view === 'ous') loadOUs();
-});
+const domainSel = document.getElementById('domainSelect');
+if (domainSel) {
+  domainSel.addEventListener('change', e => {
+    currentDomain = e.target.value;
+    const active = document.querySelector('.nav-btn.active');
+    const view = active ? active.dataset.view : '';
+    if (view === 'users') loadUsers();
+    if (view === 'groups') loadGroups();
+    if (view === 'computers') loadComputers();
+    if (view === 'ous') loadOUs();
+  });
+}
 
 async function loadUsers() {
   const res = await loadObjects('User', {domain: currentDomain, search: document.getElementById('userSearch').value});
@@ -563,42 +622,5 @@ document.getElementById('pathClear').addEventListener('click', () => {
   document.getElementById('pathSrc').value=''; document.getElementById('pathDst').value=''; document.getElementById('pathResults').innerHTML=''; pathSrcSel=null; pathDstSel=null;
 });
 
-loadDomains();
-setView('overview');
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', attachNav);
-} else {
-  attachNav();
-}
-function attachNav() {
-  document.querySelectorAll('.nav-btn').forEach(b => {
-    b.removeEventListener('click', navClick);
-    b.addEventListener('click', navClick);
-  });
-}
-function navClick() {
-  setView(this.dataset.view);
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-  document.querySelectorAll('.nav-btn').forEach(function(b) {
-    b.onclick = function() {
-      var view = this.getAttribute('data-view');
-      setView(view);
-      var active = document.querySelector('.nav-btn.active');
-      if (active) active.classList.remove('active');
-      this.classList.add('active');
-      try { loadDomains(); } catch(e){}
-      if (view === 'users') {
-        loadUsers();
-      } else if (view === 'groups') {
-        loadGroups();
-      } else if (view === 'computers') {
-        loadComputers();
-      } else if (view === 'ous') {
-        loadOUs();
-      }
-    };
-  });
-});
+// Initial view will be set after DOM ready/ init
+setTimeout(() => setView('overview'), 0);
