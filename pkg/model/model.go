@@ -67,6 +67,11 @@ const (
 	EdgeDumpSMSAPassword           EdgeKind = "DumpSMSAPassword"
 )
 
+// AllKinds lists every node kind the schema defines, in a stable order.
+func AllKinds() []Kind {
+	return []Kind{KindUser, KindGroup, KindComputer, KindDomain, KindOU, KindGPO, KindContainer, KindTrust, KindBase}
+}
+
 // Node is a single AD entity. Props carries collector-specific attributes
 // (e.g. "enabled", "admincount", "pwdlastset") without needing schema changes.
 type Node struct {

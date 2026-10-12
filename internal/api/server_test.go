@@ -71,6 +71,64 @@ func TestStatsAndGraph(t *testing.T) {
 	}
 }
 
+func TestStatsIncludesKindCounts(t *testing.T) {
+	h := newTestServer(t).Handler()
+	w := do(t, h, "GET", "/api/v1/stats", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("stats status = %d", w.Code)
+	}
+	// encoding/json sorts map keys, so the ordering is stable.
+	if !strings.Contains(w.Body.String(), `"kinds":{"Computer":1,"User":1}`) {
+		t.Fatalf("stats kinds = %s", w.Body.String())
+	}
+}
+
+func TestObjectsSort(t *testing.T) {
+	h := newTestServer(t).Handler()
+	// Unpaged store order is SID ascending: ...1003 (WS01) then ...1103 (jdoe).
+	w := do(t, h, "GET", "/api/v1/objects?type=User", "", nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":1`) {
+		t.Fatalf("objects = %d %s", w.Code, w.Body.String())
+	}
+	w = do(t, h, "GET", "/api/v1/objects?sort=name", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("sorted objects = %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// jdoe sorts before WS01, and the User node must appear first.
+	if strings.Index(body, "jdoe") > strings.Index(body, "WS01") {
+		t.Fatalf("sort=name did not order by name: %s", body)
+	}
+}
+
+func TestObjectsSortIsStableWithUnknownKey(t *testing.T) {
+	h := newTestServer(t).Handler()
+	w := do(t, h, "GET", "/api/v1/objects?sort=bogus", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("unknown sort must not error: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestObjectsAttributeFilter(t *testing.T) {
+	st := graph.NewMemory()
+	ctx := context.Background()
+	if err := st.UpsertNodes(ctx, []model.Node{
+		{ID: "A", Kind: model.KindUser, Name: "alice", Domain: "corp.local", Props: map[string]string{"enabled": "true"}},
+		{ID: "B", Kind: model.KindUser, Name: "bob", Domain: "corp.local", Props: map[string]string{"enabled": "false"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Config{StoreIface: st, Version: "test"}).Handler()
+	w := do(t, h, "GET", "/api/v1/objects?type=User&attr_enabled=true", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("attr filter status = %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"total":1`) || !strings.Contains(body, "alice") || strings.Contains(body, "bob") {
+		t.Fatalf("attr_enabled=true filter = %s", body)
+	}
+}
+
 func TestAbuseEndpoint(t *testing.T) {
 	h := newTestServer(t).Handler()
 	w := do(t, h, "GET", "/api/v1/abuse?src=S-1-5-21-1-2-3-1103&kind=GenericAll&dst=S-1-5-21-1-2-3-1003", "", nil)

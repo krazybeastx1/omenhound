@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -163,7 +164,25 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, st)
+	// Per-kind totals so the Overview and Path Explorer render real counts
+	// without shipping the entire graph to the browser. SearchNodes with a
+	// limit of 1 returns the cheap count(*) for both backends.
+	kinds := make(map[string]int, len(model.AllKinds()))
+	for _, k := range model.AllKinds() {
+		_, total, err := s.store.SearchNodes(r.Context(), "", k, "", 1, 0)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if total > 0 {
+			kinds[string(k)] = total
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": st.Nodes,
+		"edges": st.Edges,
+		"kinds": kinds,
+	})
 }
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
@@ -514,21 +533,121 @@ func (s *Server) handleObjects(w http.ResponseWriter, r *http.Request) {
 	if search == "" {
 		search = q.Get("q")
 	}
+	sortKey := q.Get("sort")
 	limit, offset := pageParams(r)
 	var kind model.Kind
 	if kindStr != "" {
 		kind = model.Kind(strings.TrimSpace(kindStr))
+	}
+	// Attribute filters arrive as attr_<prop>=<value> (e.g. attr_enabled=true,
+	// attr_os=Windows 11). They are applied to collector props so new filters
+	// need no schema change.
+	attrs := map[string]string{}
+	for k, v := range q {
+		if name, ok := strings.CutPrefix(k, "attr_"); ok && name != "" && len(v) > 0 && v[0] != "" {
+			attrs[name] = v[0]
+		}
 	}
 	nodes, total, err := s.store.SearchNodes(r.Context(), search, kind, domain, limit, offset)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Sorting and attribute filtering need the full (unpaged) match set so that
+	// totals and paging stay correct.
+	if sortKey != "" || len(attrs) > 0 {
+		all, _, err := s.store.SearchNodes(r.Context(), search, kind, domain, total, 0)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(attrs) > 0 {
+			all = filterByProps(all, attrs)
+			total = len(all)
+		}
+		sortNodes(all, sortKey)
+		nodes = page(all, limit, offset)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total":  total,
 		"limit":  limit,
 		"offset": offset,
 		"nodes":  nodes,
+	})
+}
+
+// filterByProps keeps nodes whose collector props match every requested value
+// (case-insensitive). An empty filter returns the input unchanged.
+func filterByProps(nodes []model.Node, attrs map[string]string) []model.Node {
+	if len(attrs) == 0 {
+		return nodes
+	}
+	out := make([]model.Node, 0, len(nodes))
+	for _, n := range nodes {
+		match := true
+		for k, want := range attrs {
+			got := ""
+			if n.Props != nil {
+				got = n.Props[k]
+			}
+			if !strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(want)) {
+				match = false
+				break
+			}
+		}
+		if match {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// sortNodes orders nodes in place by an allowlisted UI sort key. Unknown or
+// empty keys keep the store's natural SID ordering so the endpoint never
+// rejects a request from the UI.
+func sortNodes(nodes []model.Node, key string) {
+	field := ""
+	switch key {
+	case "name":
+		field = "name"
+	case "sam":
+		field = "sam"
+	case "domain":
+		field = "domain"
+	case "dn":
+		field = "dn"
+	case "os":
+		field = "os"
+	case "guid":
+		field = "guid"
+	case "type":
+		field = "type"
+	default:
+		return
+	}
+	value := func(n model.Node) string {
+		switch field {
+		case "name":
+			return strings.ToLower(n.Name)
+		case "sam":
+			return strings.ToLower(n.SAMAccountName)
+		case "domain":
+			return strings.ToLower(n.Domain)
+		case "dn":
+			return strings.ToLower(n.DN)
+		default:
+			if n.Props == nil {
+				return ""
+			}
+			return strings.ToLower(n.Props[field])
+		}
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		a, b := value(nodes[i]), value(nodes[j])
+		if a == b {
+			return nodes[i].ID < nodes[j].ID
+		}
+		return a < b
 	})
 }
 
