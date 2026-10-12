@@ -95,6 +95,28 @@ const NODE_RADIUS = {
   GPO: 8, OU: 8, Trust: 9, Base: 6,
 };
 
+// Session evidence is the BloodHound `HasSession` edge: (User)-[:HasSession]->(Computer).
+// OmenHound's collectors emit it with no properties, so the UI never asserts a
+// timestamp or an observed/historical/stale status it cannot prove.
+const SESSION_EDGE = "HasSession";
+
+// Optional, backward-compatible credential-evidence namespace for node props.
+//
+// A collector *may* attach keys prefixed `cred.` to a node to describe a
+// credential reference, e.g.:
+//
+//   cred.type        password | nthash | ntlm | kerberos-ticket | token | certificate
+//   cred.source      where the reference came from (collector / import)
+//   cred.ref         an opaque fingerprint or reference id — NEVER the raw secret
+//   cred.observed_at RFC3339 collection timestamp
+//   cred.status      discovered | imported | validated | expired | unknown
+//
+// Values are treated as sensitive references and are masked by default. No
+// shipped OmenHound collector emits these keys, so the Credentials panel
+// normally renders its honest empty state; the namespace exists so a future
+// importer can surface evidence without inventing it.
+const CRED_PREFIX = "cred.";
+
 // ---------------------------------------------------------------------------
 // Element handles & graph state
 // ---------------------------------------------------------------------------
@@ -115,6 +137,10 @@ let isolateMode = false;        // show only the selected node + neighbours
 let hideUnrelatedEdges = false; // dim edges not incident to the selection
 let matchIds = new Set();       // node ids highlighted by the graph search
 let screenIndex = new Map();    // screen-space grid, rebuilt in draw() for hit tests
+let startNodeId = null;         // analysis origin — deliberately separate from selection
+let targetNodeId = null;        // path destination — deliberately separate from selection
+let sessionsOnly = false;       // filter: show only observed-session relationships
+let pathHighlight = null;       // { nodes:Set, edges:Set } highlighted from Path Explorer
 
 // view transform: screen = world * k + (x, y)
 let view = { x: 0, y: 0, k: 1 };
@@ -300,11 +326,24 @@ function setGraphStatus(kind, title, detail) {
   el.innerHTML = stateHTML(kind, title, detail);
 }
 
-function nodeHidden(n) { return n.hidden === true; }
+function nodeHidden(n) {
+  if (n.hidden === true) return true;
+  // Sessions-only filter: keep only identities/hosts that have a session edge.
+  if (sessionsOnly && !nodeHasSession(n.id)) return true;
+  return false;
+}
+
+// True when the node participates in at least one observed-session edge.
+function nodeHasSession(id) {
+  const rec = adjacency.get(id);
+  if (!rec) return false;
+  return rec.out.some((e) => e.kind === SESSION_EDGE) || rec.in.some((e) => e.kind === SESSION_EDGE);
+}
 
 function edgeHidden(e) {
   const ek = val("edgeKindFilter");
   if (ek && e.kind !== ek) return true;
+  if (sessionsOnly && e.kind !== SESSION_EDGE) return true;
   const a = byId.get(e.source);
   const b = byId.get(e.target);
   if ((a && nodeHidden(a)) || (b && nodeHidden(b))) return true;
@@ -614,6 +653,26 @@ function drawArrow(c, ax, ay, bx, by, color, alpha) {
   c.restore();
 }
 
+// Draw the small S/T badge used to mark the starting / target node. Shape + text
+// carry the meaning, so it survives greyscale and colour-blind rendering.
+function drawMarkerBadge(c, x, y, r, letter, color) {
+  const bx = x - r - 11, by = y - r - 11;
+  c.save();
+  c.beginPath();
+  c.arc(bx, by, 7, 0, Math.PI * 2);
+  c.fillStyle = "#0b0e14";
+  c.fill();
+  c.lineWidth = 1.6;
+  c.strokeStyle = color;
+  c.stroke();
+  c.fillStyle = color;
+  c.font = "bold 9px ui-sans-serif,system-ui,sans-serif";
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillText(letter, bx, by + 0.5);
+  c.restore();
+}
+
 function draw() {
   if (!canvas || !ctx || !canvas.parentElement) return;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -654,12 +713,15 @@ function draw() {
     const isSel = selectedEdge === e;
     const isHover = hoverEdge === e;
     const incident = !!selectedNode && (e.source === selectedNode.id || e.target === selectedNode.id);
-    const highlighted = isSel || isHover || incident || (focus && focus.has(e.source) && focus.has(e.target));
-    const dimmed = (focus && !highlighted) || (hideUnrelatedEdges && !incident && !isSel);
+    const onPath = inPathEdges(e);
+    const highlighted = isSel || isHover || incident || onPath || (focus && focus.has(e.source) && focus.has(e.target));
+    let dimmed = (focus && !highlighted) || (hideUnrelatedEdges && !incident && !isSel);
+    // While a path is highlighted, fade everything off the path.
+    if (pathHighlight && !onPath) dimmed = true;
 
-    ctx.strokeStyle = isSel ? "#ffffff" : edgeColor(e.kind);
-    ctx.lineWidth = isSel ? 2.6 : isHover ? 2.2 : incident ? 1.8 : 1.1;
-    ctx.globalAlpha = dimmed ? 0.05 : (isSel || isHover || incident) ? 0.95 : 0.42;
+    ctx.strokeStyle = isSel ? "#ffffff" : onPath ? "#ffd600" : edgeColor(e.kind);
+    ctx.lineWidth = onPath ? 3.4 : isSel ? 2.6 : isHover ? 2.2 : incident ? 1.8 : 1.1;
+    ctx.globalAlpha = dimmed ? 0.05 : (isSel || isHover || incident || onPath) ? 0.95 : 0.42;
     ctx.beginPath();
     ctx.moveTo(ax, ay);
     ctx.lineTo(bx, by);
@@ -700,7 +762,9 @@ function draw() {
     const isSel = selectedNode === node;
     const isHover = hoverNode === node;
     const isMatch = matchIds.has(node.id);
-    const dim = (focus && !focus.has(node.id)) || (node.dim && !isSel && !isHover);
+    const onPath = inPathNodes(node.id);
+    let dim = (focus && !focus.has(node.id)) || (node.dim && !isSel && !isHover);
+    if (pathHighlight && !onPath) dim = true;
 
     ctx.globalAlpha = dim ? 0.12 : 1;
     ctx.beginPath();
@@ -720,6 +784,26 @@ function draw() {
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 2, 0, Math.PI * 2);
       ctx.stroke();
+    }
+
+    // Starting / target markers use a distinct SHAPE and a letter label, so the
+    // meaning never depends on colour alone (accessible in greyscale too).
+    if (node.id === startNodeId) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#00d4ff";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(p.x, p.y, r + 8, 0, Math.PI * 2); ctx.stroke();
+      drawMarkerBadge(ctx, p.x, p.y, r, "S", "#00d4ff");
+    }
+    if (node.id === targetNodeId) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#ff8c42";
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.arc(p.x, p.y, r + 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      drawMarkerBadge(ctx, p.x, p.y, r, "T", "#ff8c42");
     }
     ctx.globalAlpha = 1;
   }
@@ -1088,6 +1172,187 @@ function applyFilters() {
 }
 
 // ---------------------------------------------------------------------------
+// Analysis state: starting node, target node, sessions, credentials, paths
+// ---------------------------------------------------------------------------
+
+// Stable key for an edge (nodes already use SIDs; kind keeps parallels distinct).
+function edgeKey(e) { return `${e.source}|${e.kind}|${e.target}`; }
+
+function startNode() { return startNodeId ? byId.get(startNodeId) || null : null; }
+function targetNode() { return targetNodeId ? byId.get(targetNodeId) || null : null; }
+
+function inPathNodes(id) { return !!(pathHighlight && pathHighlight.nodes.has(id)); }
+function inPathEdges(e) { return !!(pathHighlight && pathHighlight.edges.has(edgeKey(e))); }
+
+// Set the analysis origin. This is intentionally separate from `selectedNode`:
+// the origin persists as the operator inspects other entities.
+function setStartNode(id, opts = {}) {
+  const n = id ? byId.get(id) || null : null;
+  startNodeId = n ? n.id : null;
+  if (n && opts.focus !== false) focusNode(n); // focusing also selects + centres
+  updateStartUI();
+  applyFilters();
+  toast(n ? `Starting node: ${nodeLabel(n)}` : "Starting node cleared", "info");
+  return n;
+}
+
+// Set the path destination. Also separate from the selection.
+function setTargetNode(id) {
+  const n = id ? byId.get(id) || null : null;
+  targetNodeId = n ? n.id : null;
+  updateStartUI();
+  applyFilters();
+  toast(n ? `Target: ${nodeLabel(n)}` : "Target cleared", "info");
+  return n;
+}
+
+// Reflect start/target/selection state in the toolbar chips, buttons and hints.
+function updateStartUI() {
+  const s = startNode(), t = targetNode();
+  const sChip = document.getElementById("startNodeChip");
+  if (sChip) {
+    if (s) {
+      sChip.hidden = false;
+      sChip.innerHTML = `<span class="chip-label">start</span> ${esc(truncate(nodeLabel(s), 22))} <span class="chip-kind">${esc(s.kind)}</span>`;
+      sChip.title = `Starting node: ${nodeLabel(s)} (${s.kind})`;
+    } else { sChip.hidden = true; sChip.innerHTML = ""; }
+  }
+  const tChip = document.getElementById("targetNodeChip");
+  if (tChip) {
+    if (t) {
+      tChip.hidden = false;
+      tChip.innerHTML = `<span class="chip-label">target</span> ${esc(truncate(nodeLabel(t), 22))} <span class="chip-kind">${esc(t.kind)}</span>`;
+      tChip.title = `Target: ${nodeLabel(t)} (${t.kind})`;
+    } else { tChip.hidden = true; tChip.innerHTML = ""; }
+  }
+  for (const id of ["setStartFromSelection", "setTargetFromSelection", "setStartFromNode", "setTargetFromNode"]) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !selectedNode;
+  }
+  const summary = document.getElementById("selectionSummary");
+  if (summary) {
+    if (selectedNode) summary.textContent = `Selected: ${truncate(nodeLabel(selectedNode), 24)} (${selectedNode.kind})`;
+    else if (selectedEdge) summary.textContent = `Selected: ${truncate(selectedEdge.kind, 24)} relationship`;
+    else summary.textContent = pathHighlight ? "Path highlighted" : "Nothing selected";
+  }
+  const hint = document.getElementById("startHint");
+  if (hint) hint.textContent = s ? `Starting node: ${nodeLabel(s)} — use “⇄ Paths” to analyse from here.` : "Tip: choose a “Start from…” entity to anchor path analysis.";
+  const clearBtn = document.getElementById("clearPathHighlight");
+  if (clearBtn) clearBtn.hidden = !pathHighlight;
+}
+
+// Highlight a Path-Explorer result on the graph, then switch to the graph view.
+function highlightPath(p) {
+  if (!p) return;
+  const nodeIds = new Set((p.nodes || []).map((n) => n.id));
+  const edgeIds = new Set((p.relationships || []).map((e) => edgeKey(e)));
+  pathHighlight = { nodes: nodeIds, edges: edgeIds, length: p.length };
+  updateStartUI();
+  setView("graph");
+  applyFilters();
+  // renderView fits the whole graph on a timer; fit the path just after.
+  setTimeout(() => fitToNodes(nodeIds), 40);
+  toast(`Path highlighted (${p.length} hop${p.length === 1 ? "" : "s"})`, "success");
+}
+
+function clearPathHighlight() {
+  if (!pathHighlight) return;
+  pathHighlight = null;
+  updateStartUI();
+  applyFilters();
+  toast("Path highlight cleared", "info");
+}
+
+// Fit the viewport to a specific set of node ids (used for path highlight).
+function fitToNodes(ids) {
+  if (!canvas) return;
+  const list = [];
+  for (const id of ids) { const n = byId.get(id); if (n) list.push(n); }
+  if (!list.length) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of list) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+  view.k = clamp(Math.min((w - 160) / spanX, (h - 160) / spanY), 0.2, 2.2);
+  view.x = w / 2 - cx * view.k;
+  view.y = h / 2 - cy * view.k;
+  requestRender();
+}
+
+// Observed sessions relevant to a node, split by the node's role (User vs host).
+function sessionsFor(node) {
+  const rec = adjacency.get(node.id) || { out: [], in: [], neighbors: [] };
+  // HasSession is (User)-[:HasSession]->(Computer): outbound from user, inbound to host.
+  return {
+    onHosts: rec.out.filter((e) => e.kind === SESSION_EDGE),  // identity seen on these hosts
+    here: rec.in.filter((e) => e.kind === SESSION_EDGE),      // hosts that observed these identities
+  };
+}
+
+// Membership-ish edges in both directions, plus explicit delegated/admin rights.
+function membershipsFor(node) {
+  const rec = adjacency.get(node.id) || { out: [], in: [], neighbors: [] };
+  const priv = new Set(["AdminTo", "AllowedToAct", "AllowedToDelegate", "CanRDP", "CanPSRemote", "ExecuteDCOM"]);
+  return {
+    memberOf: rec.out.filter((e) => e.kind === "MemberOf"),
+    members: rec.in.filter((e) => e.kind === "MemberOf"),
+    rights: rec.out.filter((e) => priv.has(e.kind)),
+  };
+}
+
+// Credential *references* declared through the documented prop namespace (top of file).
+function credentialEvidence(node) {
+  return Object.entries(node.props || {})
+    .filter(([k]) => k.startsWith(CRED_PREFIX))
+    .map(([k, v]) => [k.slice(CRED_PREFIX.length), String(v)]);
+}
+
+// Mask a secret-ish value, keeping a short prefix/suffix so values can be told apart.
+function maskSecret(v) {
+  const s = String(v == null ? "" : v);
+  if (s.length <= 4) return "••••";
+  return `${s.slice(0, 2)}${"•".repeat(Math.min(24, s.length - 4))}${s.slice(-2)}`;
+}
+
+// Copy text to the clipboard without ever routing it through storage or logs.
+function copyText(t, msg) {
+  if (!t) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(() => { if (msg) toast(msg, "success"); }).catch(() => toast("Copy failed", "warn"));
+    return;
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    if (msg) toast(msg, "success");
+  } catch (_) { toast("Copy failed", "warn"); }
+}
+
+// Open Path Explorer with `node` pre-filled as the source (no duplicate engine).
+function openPathsFrom(node) {
+  if (!node) return;
+  pathSrcSel = node.id;
+  const src = document.getElementById("pathSrc");
+  if (src) src.value = nodeLabel(node);
+  setView("paths");
+}
+
+// Toolbar "⇄ Paths": use the starting node (or the selection) as the source.
+function findPathsFromStart() {
+  const s = startNode() || selectedNode;
+  if (!s) { toast("Choose a starting node first", "warn"); return; }
+  openPathsFrom(s);
+  const note = document.getElementById("pathNote");
+  if (note) note.textContent = `Source set to ${nodeLabel(s)} — choose a destination, then run the search.`;
+}
+
+// ---------------------------------------------------------------------------
 // Panels & inspector
 // ---------------------------------------------------------------------------
 
@@ -1106,6 +1371,7 @@ function clearSelection() {
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = true;
   if (isolateMode) applyFilters();
+  updateStartUI();
   requestRender();
 }
 
@@ -1124,7 +1390,7 @@ function selectNode(n) {
     ["sam", n.sam_account_name || ""],
     ["domain", n.domain || ""],
     ["dn", n.distinguished_name || ""],
-    ...Object.entries(n.props || {}),
+    ...Object.entries(n.props || {}).filter(([k]) => !k.startsWith(CRED_PREFIX)),
   ].filter(([, v]) => v !== "" && v !== undefined && v !== null);
   const propsEl = document.getElementById("node-props");
   if (propsEl) {
@@ -1144,15 +1410,21 @@ function selectNode(n) {
   const connEl = document.getElementById("nodeConnected");
   if (connEl) connEl.textContent = rec.neighbors.length;
 
+  renderNodeMemberships(n);
+  renderNodeSessions(n);
+  renderNodeCredentials(n);
+  renderNodeProvenance(n);
+
   // Clicking a relationship row inspects that edge...
-  for (const li of document.querySelectorAll("#node-out li[data-src],#node-in li[data-src]")) {
-    li.addEventListener("click", () => {
+  for (const li of document.querySelectorAll("#panel-node li[data-src]")) {
+    li.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-node]")) return;
       const e = edges.find((x) => x.source === li.dataset.src && x.target === li.dataset.tgt && x.kind === li.dataset.kind);
       if (e) selectEdge(e);
     });
   }
   // ...clicking the connected entity selects + focuses that node in the graph.
-  for (const btn of document.querySelectorAll("#node-out [data-node],#node-in [data-node]")) {
+  for (const btn of document.querySelectorAll("#panel-node [data-node]")) {
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       const tgt = byId.get(btn.dataset.node);
@@ -1169,8 +1441,80 @@ function selectNode(n) {
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = false;
   syncGraphControls();
+  updateStartUI();
   requestRender();
 }
+
+// ---- Inspector section renderers (structure comes from real graph evidence) ----
+
+function renderNodeMemberships(n) {
+  const el = document.getElementById("node-memberships");
+  if (!el) return;
+  const m = membershipsFor(n);
+  const parts = [];
+  if (m.memberOf.length) parts.push(`<h4 class="rel-head">Member of</h4><ul class="edges" role="list">${edgeList(m.memberOf, "target", "→")}</ul>`);
+  if (m.members.length) parts.push(`<h4 class="rel-head">Members</h4><ul class="edges" role="list">${edgeList(m.members, "source", "←")}</ul>`);
+  if (m.rights.length) parts.push(`<h4 class="rel-head">Rights over</h4><ul class="edges" role="list">${edgeList(m.rights, "target", "→")}</ul>`);
+  el.innerHTML = parts.length
+    ? parts.join("")
+    : '<p class="muted small">No membership or role relationships for this entity in the dataset.</p>';
+}
+
+function renderNodeSessions(n) {
+  const el = document.getElementById("node-sessions");
+  if (!el) return;
+  const s = sessionsFor(n);
+  const parts = [];
+  if (s.onHosts.length) parts.push(`<h4 class="rel-head">Observed on hosts</h4><ul class="edges" role="list">${edgeList(s.onHosts, "target", "→")}</ul>`);
+  if (s.here.length) parts.push(`<h4 class="rel-head">Identities observed here</h4><ul class="edges" role="list">${edgeList(s.here, "source", "←")}</ul>`);
+  if (!parts.length) {
+    el.innerHTML = '<p class="muted small">No session evidence for this entity in the current dataset.</p>' +
+      '<p class="muted small">Sessions appear only when a collector observed them (e.g. <code>-c session</code> over SMB) or an imported dataset contained them. No session is inferred from unrelated edges.</p>';
+    return;
+  }
+  el.innerHTML = parts.join("") +
+    '<p class="muted small session-note">These are observations made at collection time. The dataset carries no per-session timestamp or validity flag, so no observed/stale status is asserted.</p>';
+}
+
+function renderNodeCredentials(n) {
+  const el = document.getElementById("node-credentials");
+  if (!el) return;
+  const creds = credentialEvidence(n);
+  if (!creds.length) {
+    el.innerHTML = '<p class="muted small">No credential evidence in this dataset for this entity.</p>' +
+      '<p class="muted small">OmenHound does not store secrets in the graph. If an importer supplies credential <em>references</em> under the ' +
+      `<code>${esc(CRED_PREFIX)}</code> property namespace, they are shown here masked by default. Absence here is never proof of absence of credentials.</p>`;
+    return;
+  }
+  const rows = creds.map(([k, v], i) =>
+    `<dt>${esc(k)}</dt><dd><span class="secret" data-secret="${esc(v)}" data-i="${i}">${esc(maskSecret(v))}</span> <button type="button" class="link-node reveal-secret" data-i="${i}">reveal</button></dd>`
+  ).join("");
+  el.innerHTML = `<dl class="cred-dl">${rows}</dl>
+    <p class="muted small">Credential references only — never raw secrets. Values are masked by default, are held in the DOM only while this panel is open, and are never written to browser storage, the URL or logs. A reference is not evidence that authentication would succeed.</p>`;
+  el.querySelectorAll(".reveal-secret").forEach((b) => {
+    b.addEventListener("click", () => {
+      const span = el.querySelector(`.secret[data-i="${b.dataset.i}"]`);
+      if (!span) return;
+      const shown = span.dataset.shown === "1";
+      span.textContent = shown ? maskSecret(span.dataset.secret) : span.dataset.secret;
+      span.dataset.shown = shown ? "0" : "1";
+      b.textContent = shown ? "reveal" : "hide";
+    });
+  });
+}
+
+function renderNodeProvenance(n) {
+  const el = document.getElementById("node-provenance");
+  if (!el) return;
+  const rows = [["node_id", n.id], ["kind", n.kind]];
+  if (n.domain) rows.push(["domain", n.domain]);
+  if (n.distinguished_name) rows.push(["dn", n.distinguished_name]);
+  if (statsCache) rows.push(["graph_total", `${statsCache.nodes} nodes / ${statsCache.edges} edges`]);
+  const dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+  el.innerHTML = `<dl class="prov-dl">${dl}</dl>
+    <p class="muted small">The read API exposes graph structure only; collection-run metadata (collector name, run timestamps) is not persisted, so none is fabricated here. Entities are keyed by their stable identifier — the AD SID, or objectGUID when no SID exists.</p>`;
+}
+
 
 function edgeList(list, other, dir) {
   if (!list.length) return "<li class='muted'>none</li>";
@@ -1192,6 +1536,19 @@ async function selectEdge(e) {
   const summaryEl = document.getElementById("edge-summary");
   if (titleEl) titleEl.innerHTML = `${esc(e.kind)} <span class="node-kind-badge" style="background:${edgeColor(e.kind)};color:#0b0e14">${esc((EDGE_CATEGORIES[edgeCategory(e.kind)] || {}).label || "Other")}</span>`;
   if (summaryEl) summaryEl.textContent = `${a ? nodeLabel(a) : e.source} → ${b ? nodeLabel(b) : e.target}`;
+
+  // Session relationships get an explicit evidence note, never invented metadata.
+  const sessionNote = document.getElementById("edge-session-note");
+  if (sessionNote) {
+    if (e.kind === SESSION_EDGE) {
+      sessionNote.hidden = false;
+      sessionNote.innerHTML = `<strong>Observed session.</strong> The collector saw <em>${esc(a ? nodeLabel(a) : e.source)}</em> on <em>${esc(b ? nodeLabel(b) : e.target)}</em>. ` +
+        `The dataset records no per-session timestamp or validity, so no observed/stale/expired state is asserted. A session is not proof that the identity can authenticate with every credential associated with it.`;
+    } else {
+      sessionNote.hidden = true;
+      sessionNote.textContent = "";
+    }
+  }
 
   const cmdEl = document.getElementById("edge-command");
   const opsecEl = document.getElementById("edge-opsec");
@@ -1219,6 +1576,7 @@ async function selectEdge(e) {
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = false;
   syncGraphControls();
+  updateStartUI();
   requestRender();
 
   try {
@@ -2020,13 +2378,13 @@ function wirePathSuggest(inputId, resId, setter) {
         const j = await apiGet("/api/v1/objects?search=" + encodeURIComponent(q) + "&limit=10");
         const items = j.nodes || [];
         res.innerHTML = items.length
-          ? items.map((n) => `<div class="suggest-item" data-id="${esc(n.id)}">${esc(nodeLabel(n))} <span class="kind">${esc(n.kind)}</span></div>`).join("")
+          ? items.map((n) => `<div class="suggest-item" data-id="${esc(n.id)}" data-label="${esc(nodeLabel(n))}" role="option">${esc(nodeLabel(n))} <span class="kind">${esc(n.kind)}</span></div>`).join("")
           : '<div class="suggest-item muted">no matches</div>';
         res.hidden = false;
         res.querySelectorAll(".suggest-item[data-id]").forEach((el) => {
           el.addEventListener("click", () => {
             setter(el.dataset.id);
-            input.value = el.textContent.trim();
+            input.value = el.dataset.label || el.textContent.trim();
             res.hidden = true;
             res.innerHTML = "";
           });
@@ -2088,8 +2446,19 @@ function wirePathExplorer() {
             <div class="path-header"><span class="path-length">len ${p.length}</span><span class="muted small">Path ${i + 1}</span></div>
             <div class="path-nodes">${nodeChips}</div>
             <div class="path-rels">${relChips}</div>
+            <div class="path-footer">
+              <button type="button" class="show-path-btn chip-btn" data-path="${i}">⌖ Show on graph</button>
+              <span class="muted small">Edges and direction are dataset evidence; a path is not asserted to be exploitable.</span>
+            </div>
           </div>`;
         }).join("");
+        // Highlight any path directly on the graph canvas.
+        results.querySelectorAll(".show-path-btn").forEach((b) => {
+          b.addEventListener("click", () => {
+            const p = paths[Number(b.dataset.path)];
+            if (p) highlightPath(p);
+          });
+        });
       } catch (e) {
         results.innerHTML = stateHTML("error", "Path search failed", e.message);
       }
@@ -2377,6 +2746,103 @@ function wireToolbar() {
   const edgeKindFilter = document.getElementById("edgeKindFilter");
   if (edgeKindFilter) edgeKindFilter.addEventListener("change", () => { applyFilters(); });
 
+  // ---- Starting node picker (search / select / focus) ----
+  wirePathSuggest("startNodeSearch", "startNodeRes", (id) => setStartNode(id));
+
+  // ---- Selection -> start / target ----
+  const setStartBtn = document.getElementById("setStartFromSelection");
+  if (setStartBtn) setStartBtn.addEventListener("click", () => { if (selectedNode) setStartNode(selectedNode.id); });
+  const setTargetBtn = document.getElementById("setTargetFromSelection");
+  if (setTargetBtn) setTargetBtn.addEventListener("click", () => { if (selectedNode) setTargetNode(selectedNode.id); });
+  const clearPathBtn = document.getElementById("clearPathHighlight");
+  if (clearPathBtn) clearPathBtn.addEventListener("click", clearPathHighlight);
+
+  // ---- Sessions-only filter ----
+  const sessionsBtn = document.getElementById("sessionsOnly");
+  if (sessionsBtn) {
+    sessionsBtn.addEventListener("click", () => {
+      sessionsOnly = !sessionsOnly;
+      sessionsBtn.classList.toggle("active", sessionsOnly);
+      sessionsBtn.setAttribute("aria-pressed", sessionsOnly ? "true" : "false");
+      applyFilters();
+    });
+  }
+
+  // ---- Analysis: open Path Explorer from the starting node ----
+  const findPathsBtn = document.getElementById("findPathsFromGraph");
+  if (findPathsBtn) findPathsBtn.addEventListener("click", findPathsFromStart);
+
+  // ---- Inspector: collapse / hide / reopen ----
+  const panelCollapse = document.getElementById("panelCollapse");
+  if (panelCollapse) {
+    panelCollapse.addEventListener("click", () => {
+      const panelEl = document.getElementById("panel");
+      if (!panelEl) return;
+      const collapsed = panelEl.classList.toggle("collapsed");
+      panelCollapse.classList.toggle("active", collapsed);
+      panelCollapse.setAttribute("aria-pressed", collapsed ? "true" : "false");
+      panelCollapse.textContent = collapsed ? "⟨" : "⟩";
+      panelCollapse.title = collapsed ? "Expand panel" : "Collapse panel";
+      setTimeout(resize, 200);
+    });
+  }
+  const toggleInspector = document.getElementById("toggleInspector");
+  if (toggleInspector) {
+    toggleInspector.addEventListener("click", () => {
+      const panelEl = document.getElementById("panel");
+      if (!panelEl) return;
+      const hidden = panelEl.classList.toggle("hidden");
+      toggleInspector.classList.toggle("active", !hidden);
+      toggleInspector.setAttribute("aria-pressed", hidden ? "false" : "true");
+      setTimeout(resize, 200);
+    });
+  }
+
+  // ---- Inspector node actions ----
+  const nodeActions = {
+    setStartFromNode: () => { if (selectedNode) setStartNode(selectedNode.id); },
+    setTargetFromNode: () => { if (selectedNode) setTargetNode(selectedNode.id); },
+    focusNodeBtn: () => { if (selectedNode) focusNode(selectedNode); },
+    findPathsFromNode: () => { if (selectedNode) openPathsFrom(selectedNode); },
+    copyNodeId: () => { if (selectedNode) copyText(selectedNode.id, "Identifier copied"); },
+  };
+  for (const [id, fn] of Object.entries(nodeActions)) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", fn);
+  }
+
+  // ---- Inspector relationship actions ----
+  const edgeActions = {
+    focusEdgeSource: () => { const n = selectedEdge && byId.get(selectedEdge.source); if (n) focusNode(n); },
+    focusEdgeTarget: () => { const n = selectedEdge && byId.get(selectedEdge.target); if (n) focusNode(n); },
+    setStartFromEdge: () => { if (selectedEdge) setStartNode(selectedEdge.source); },
+    setTargetFromEdge: () => { if (selectedEdge) setTargetNode(selectedEdge.target); },
+    filterEdgeKind: () => {
+      if (!selectedEdge) return;
+      const sel = document.getElementById("edgeKindFilter");
+      if (sel) { sel.value = selectedEdge.kind; applyFilters(); }
+    },
+  };
+  for (const [id, fn] of Object.entries(edgeActions)) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", fn);
+  }
+
+  // ---- Inspector close (keeps the graph selection) vs clear selection ----
+  const panelClose = document.getElementById("panelClose");
+  if (panelClose && !panelClose.dataset.bound) {
+    panelClose.dataset.bound = "1";
+    panelClose.addEventListener("click", () => {
+      const panelEl = document.getElementById("panel");
+      if (panelEl) panelEl.classList.add("hidden");
+      const ti = document.getElementById("toggleInspector");
+      if (ti) { ti.classList.remove("active"); ti.setAttribute("aria-pressed", "false"); }
+      setTimeout(resize, 200);
+    });
+  }
+  // Note: the old behaviour of #panelClose was clearSelection; that was removed
+  // so closing the panel no longer destroys the selection. Esc still clears it.
+
   const showArrows = document.getElementById("showArrows");
   if (showArrows) showArrows.addEventListener("change", () => { prefs.arrows = showArrows.checked; savePrefs(); renderLegend(); requestRender(); });
 
@@ -2384,9 +2850,6 @@ function wireToolbar() {
 
   const openInGraph = document.getElementById("openInGraph");
   if (openInGraph) openInGraph.addEventListener("click", () => { if (selectedNode) centerSelection(); });
-
-  const panelClose = document.getElementById("panelClose");
-  if (panelClose) panelClose.addEventListener("click", clearSelection);
 
   const copyCommandBtn = document.getElementById("copyCommand");
   if (copyCommandBtn) {
@@ -2512,10 +2975,20 @@ document.addEventListener("keydown", (e) => {
     case "f": fitView(); break;
     case "r": resetView(); break;
     case "c": centerSelection(); break;
-    case "Escape":
-      if (gate && !gate.hidden) closeGate();
-      else closeObjectModal();
+    case "/":
+      e.preventDefault();
+      const gs = document.getElementById("graphSearch");
+      if (gs) gs.focus();
       break;
+    case "Escape": {
+      if (gate && !gate.hidden) closeGate();
+      else {
+        const modal = document.getElementById("objectModal");
+        if (modal && !modal.hidden) closeObjectModal();
+        else { clearSelection(); clearPathHighlight(); }
+      }
+      break;
+    }
   }
 });
 

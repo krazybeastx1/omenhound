@@ -73,32 +73,49 @@
       <section id="view-graph" class="view active" aria-labelledby="graph-title">
         <div class="graph-wrap">
           <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
-            <div class="toolbar-group">
+            <div class="toolbar-group" role="group" aria-label="Navigation">
               <button id="zoomOut" class="icon-btn" title="Zoom out" aria-label="Zoom out">−</button>
               <button id="zoomIn" class="icon-btn" title="Zoom in" aria-label="Zoom in">+</button>
               <button id="fitView" class="icon-btn" title="Fit to view" aria-label="Fit to view">⛶</button>
               <button id="resetView" class="icon-btn" title="Reset view" aria-label="Reset view">⟲</button>
               <button id="centerSelection" class="icon-btn" title="Center selection" aria-label="Center selection" disabled>⌖</button>
-            </div>
-            <div class="toolbar-group">
               <button id="restartLayout" class="icon-btn" title="Re-run layout" aria-label="Re-run layout">⟳</button>
+              <button id="toggleInspector" class="icon-btn" title="Show / hide the Inspector" aria-label="Toggle Inspector" aria-pressed="true">▤</button>
+            </div>
+            <div class="toolbar-group start-group" role="group" aria-label="Selection and starting point">
+              <div class="start-picker">
+                <input id="startNodeSearch" type="search" class="graph-search" placeholder="Start from…" aria-label="Search for a starting node" autocomplete="off" />
+                <div id="startNodeRes" class="suggest" role="listbox" aria-label="Starting node suggestions"></div>
+              </div>
+              <span id="startNodeChip" class="node-chip start" hidden></span>
+              <span id="targetNodeChip" class="node-chip target" hidden></span>
+              <button id="setStartFromSelection" class="icon-btn" title="Set selected node as starting node" aria-label="Set selected node as starting node" disabled>▶</button>
+              <button id="setTargetFromSelection" class="icon-btn" title="Set selected node as target" aria-label="Set selected node as target" disabled>◎</button>
+              <button id="clearPathHighlight" class="icon-btn" title="Clear the highlighted path" aria-label="Clear highlighted path" hidden>⤫</button>
+            </div>
+            <div class="toolbar-group" role="group" aria-label="Search">
+              <input id="graphSearch" type="search" class="graph-search" placeholder="Find node…" aria-label="Find a node by name or identifier" />
+            </div>
+            <div class="toolbar-group filter-group" role="group" aria-label="Filtering">
+              <span class="muted small">Filters:</span>
+              <select id="nodeKindFilter" aria-label="Filter by node kind"><option value="">All Types</option></select>
+              <select id="edgeKindFilter" aria-label="Filter by relationship type"><option value="">All Relationships</option></select>
+              <button id="sessionsOnly" class="icon-btn" title="Show only session relationships" aria-label="Show only session relationships" aria-pressed="false">👥</button>
               <button id="isolateToggle" class="icon-btn" title="Isolate selection and neighbours" aria-label="Isolate selection and neighbours" aria-pressed="false">◉</button>
               <button id="hideUnrelatedEdges" class="icon-btn" title="Hide unrelated edges" aria-label="Hide unrelated edges" aria-pressed="false">⊘</button>
               <button id="clearSelectionBtn" class="icon-btn" title="Clear selection" aria-label="Clear selection">✕</button>
             </div>
-            <div class="toolbar-group">
-              <input id="graphSearch" type="search" class="graph-search" placeholder="Find node…" aria-label="Find a node by name or identifier" />
-            </div>
-            <div class="toolbar-group">
+            <div class="toolbar-group" role="group" aria-label="Display">
               <label class="icon-btn" title="Node labels" aria-label="Toggle node labels"><input type="checkbox" id="showLabels" checked> Labels</label>
               <label class="icon-btn" title="Edge labels" aria-label="Toggle edge labels"><input type="checkbox" id="showEdgeLabels"> Edge Labels</label>
               <label class="icon-btn" title="Directional arrows" aria-label="Toggle directional arrows"><input type="checkbox" id="showArrows" checked> Arrows</label>
               <label class="icon-btn" title="Show legend" aria-label="Toggle legend"><input type="checkbox" id="showLegend" checked> Legend</label>
             </div>
-            <div class="toolbar-group filter-group">
-              <span class="muted small">Filters:</span>
-              <select id="nodeKindFilter" aria-label="Filter by node kind"><option value="">All Types</option></select>
-              <select id="edgeKindFilter" aria-label="Filter by relationship type"><option value="">All Relationships</option></select>
+            <div class="toolbar-group" role="group" aria-label="Analysis">
+              <button id="findPathsFromGraph" class="icon-btn" title="Open Path Explorer from the starting node" aria-label="Find paths from the starting node">⇄ Paths</button>
+            </div>
+            <div class="toolbar-group toolbar-summary">
+              <span id="selectionSummary" class="muted small" aria-live="polite">Nothing selected</span>
             </div>
           </div>
           <div class="graph-body">
@@ -109,32 +126,70 @@
             <aside class="panel" id="panel" role="complementary" aria-label="Inspector">
             <div class="panel-header">
               <h2 id="panelTitle">Inspector</h2>
-              <button id="panelClose" class="icon-btn" title="Close panel" aria-label="Close panel">✕</button>
+              <div class="panel-header-actions">
+                <button id="panelCollapse" class="icon-btn" title="Collapse panel" aria-label="Collapse panel" aria-pressed="false">⟩</button>
+                <button id="panelClose" class="icon-btn" title="Close panel" aria-label="Close panel">✕</button>
+              </div>
             </div>
             <div class="panel-empty" id="panel-empty">
               <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.3"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.3"/></svg>
               <h2>Select a node or edge</h2>
               <p>Click a node to inspect it, or click an edge for abuse details.</p>
+              <p class="muted small" id="startHint"></p>
             </div>
             <section class="panel-body" id="panel-node" hidden>
               <h2 id="node-title"></h2>
-              <dl id="node-props"></dl>
-              <p class="node-meta muted small">Connected entities: <span id="nodeConnected" class="count">0</span></p>
-              <div class="panel-section">
-                <h3>Outgoing <span id="nodeOutCount" class="count"></span></h3>
+              <div class="insp-actions" id="node-actions" role="group" aria-label="Node actions">
+                <button id="setStartFromNode" class="chip-btn" title="Use this node as the origin of an analysis">▶ Start here</button>
+                <button id="setTargetFromNode" class="chip-btn" title="Use this node as the path destination">◎ Set target</button>
+                <button id="focusNodeBtn" class="chip-btn" title="Center and zoom this node">⌖ Focus</button>
+                <button id="findPathsFromNode" class="chip-btn" title="Open Path Explorer with this node as the source">⇄ Paths</button>
+                <button id="copyNodeId" class="chip-btn" title="Copy this entity's stable identifier (SID)">⧉ SID</button>
+              </div>
+              <details class="insp-section" open>
+                <summary>Overview</summary>
+                <dl id="node-props"></dl>
+                <p class="node-meta muted small">Connected entities: <span id="nodeConnected" class="count">0</span></p>
+              </details>
+              <details class="insp-section" open>
+                <summary>Memberships &amp; Roles</summary>
+                <div id="node-memberships" class="rel-block"></div>
+              </details>
+              <details class="insp-section" open>
+                <summary>Sessions</summary>
+                <div id="node-sessions" class="rel-block"></div>
+              </details>
+              <details class="insp-section">
+                <summary>Credentials</summary>
+                <div id="node-credentials" class="rel-block"></div>
+              </details>
+              <details class="insp-section" open>
+                <summary>Outgoing <span id="nodeOutCount" class="count"></span></summary>
                 <ul id="node-out" class="edges" role="list"></ul>
-              </div>
-              <div class="panel-section">
-                <h3>Incoming <span id="nodeInCount" class="count"></span></h3>
+              </details>
+              <details class="insp-section" open>
+                <summary>Incoming <span id="nodeInCount" class="count"></span></summary>
                 <ul id="node-in" class="edges" role="list"></ul>
-              </div>
+              </details>
+              <details class="insp-section">
+                <summary>Evidence &amp; Provenance</summary>
+                <div id="node-provenance" class="rel-block"></div>
+              </details>
               <div class="panel-actions">
-                <button id="openInGraph" class="primary" disabled>Open in Graph</button>
+                <button id="openInGraph" class="primary" disabled>Center in Graph</button>
               </div>
             </section>
             <section class="panel-body" id="panel-edge" hidden>
               <h2 id="edge-title">Edge</h2>
               <p id="edge-summary" class="muted"></p>
+              <div class="insp-actions" id="edge-actions" role="group" aria-label="Relationship actions">
+                <button id="focusEdgeSource" class="chip-btn" title="Select and focus the source entity">⌖ Source</button>
+                <button id="focusEdgeTarget" class="chip-btn" title="Select and focus the target entity">⌖ Target</button>
+                <button id="setStartFromEdge" class="chip-btn" title="Set the source entity as the analysis origin">▶ Start = source</button>
+                <button id="setTargetFromEdge" class="chip-btn" title="Set the target entity as the path destination">◎ Target = target</button>
+                <button id="filterEdgeKind" class="chip-btn" title="Show only relationships of this type">⧩ Filter type</button>
+              </div>
+              <div id="edge-session-note" class="session-note" hidden></div>
               <dl id="edge-props"></dl>
               <section class="abuse">
                 <h3>Dynamic Abuse Commands</h3>

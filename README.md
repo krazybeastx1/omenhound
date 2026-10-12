@@ -163,6 +163,76 @@ export OMENHOUND_API_TOKEN="$(openssl rand -hex 32)"
   --collector none --addr 127.0.0.1:8080
 ```
 
+### Graph Explorer (web UI)
+
+The Graph Explorer is a dependency-free canvas force layout served from the same
+binary — no CDN, no bundler, no third-party graph library. The toolbar is grouped
+by purpose:
+
+| Group | Controls |
+|---|---|
+| Navigation | zoom out/in, fit to view, reset view, center selection, re-run layout, show/hide Inspector |
+| Start & selection | **Start from…** picker, start/target chips, set start/target from the selection, clear path highlight |
+| Search | find node (name / SAM / SID) |
+| Filtering | node-kind filter, relationship filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
+| Display | node labels, edge labels, directional arrows, legend |
+| Analysis | open **Path Explorer** from the starting node |
+
+Three entity roles are kept deliberately separate and are never inferred from
+one another:
+
+* **Selected node** — the entity currently open in the Inspector.
+* **Starting node** — the origin of an analysis (set from the picker, the
+  Inspector’s *▶ Start here*, or a relationship row). Persists while you inspect
+  other entities.
+* **Target node** — the destination used by path analysis.
+
+**Starting node.** Type in *Start from…* to search every object; picking a result
+sets the starting node, selects and centres it, and shows a `start` chip. The
+canvas marks it with a double ring and an **S** badge (the target gets a dashed
+ring and a **T** badge) — shape and letter, so the meaning survives greyscale.
+
+**Sessions.** Where the dataset contains `HasSession` edges
+(`(User)-[:HasSession]->(Computer)`), the Inspector’s *Sessions* section lists the
+observed relationships in both directions, and the *Sessions only* toggle filters
+the graph to just those identities and hosts. OmenHound validates no session
+metadata, and its collectors emit sessions **without timestamps or validity** —
+so the UI states only “observed at collection time” and never asserts an
+observed/historical/stale/expired status it cannot prove.
+
+**Credentials.** OmenHound does not store secrets in the graph. The Inspector’s
+*Credentials* section therefore usually shows an honest empty state. If an
+importer supplies credential **references** through the documented property
+namespace below, they are rendered masked by default with an explicit per-value
+reveal; raw values never reach the URL, browser storage or logs. A reference is
+never treated as proof that authentication would succeed.
+
+```
+cred.type        password | nthash | ntlm | kerberos-ticket | token | certificate
+cred.source      where the reference came from (collector / import)
+cred.ref         an opaque fingerprint or reference id — never the raw secret
+cred.observed_at RFC3339 collection timestamp
+cred.status      discovered | imported | validated | expired | unknown
+```
+
+**Path Explorer.** Source and target can be set from the graph (the *⇄ Paths*
+button uses the starting node, or the selection). Results honour direction
+(outgoing / incoming / undirected) and node/relationship-type filters, and any
+path can be pushed back onto the canvas with **⌖ Show on graph**, which highlights
+its nodes and edges until cleared. Paths are graph evidence: a connection is
+never presented as an exploitable attack path.
+
+Keyboard (ignored while typing): `f` fit, `r` reset, `c` centre selection,
+`/` focus the node search, `Esc` clear the selection and any highlighted path.
+
+**Data requirements & limitations.** Sessions require a collector that observed
+them (`-c session` / `loggedon` over SMB) or an imported dataset that contains
+`HasSession`. Credential evidence requires an importer that emits the `cred.*`
+namespace; the shipped collectors do not. There is no session/credential schema in
+the graph store beyond optional node properties, and the read API does not persist
+collection-run metadata, so per-entity provenance is limited to the entity’s own
+stable identifiers (SID, or objectGUID when no SID exists).
+
 ---
 
 ## CLI

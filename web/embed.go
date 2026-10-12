@@ -1,6 +1,6 @@
 // Package web embeds OmenHound's static web UI so the server ships as a single
-// binary. The UI is intentionally dependency-free vanilla JS + Sigma.js from a
-// CDN; a customized BloodHound CE frontend can replace web/static later.
+// binary. The UI is intentionally dependency-free vanilla JS with a small
+// canvas force-layout engine — no framework, bundler or CDN.
 package web
 
 import "embed"
