@@ -762,17 +762,15 @@ async function refresh() {
 
 function init() {
   try { resize(); } catch (e) {}
-  // Attach nav handlers after DOM is ready
   attachNav();
-  // Graph view is now default in HTML; setView ensures proper state
   setView('graph');
   refresh().then(() => {
-    // Fast-forward initial layout off-screen
     settleLayout();
     try { loop(); } catch (e) {}
   });
 }
 
+try { attachNav(); } catch(e){}
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
