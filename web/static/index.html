@@ -74,15 +74,25 @@
         <div class="graph-wrap">
           <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
             <div class="toolbar-group">
+              <button id="zoomOut" class="icon-btn" title="Zoom out" aria-label="Zoom out">−</button>
+              <button id="zoomIn" class="icon-btn" title="Zoom in" aria-label="Zoom in">+</button>
               <button id="fitView" class="icon-btn" title="Fit to view" aria-label="Fit to view">⛶</button>
               <button id="resetView" class="icon-btn" title="Reset view" aria-label="Reset view">⟲</button>
               <button id="centerSelection" class="icon-btn" title="Center selection" aria-label="Center selection" disabled>⌖</button>
             </div>
             <div class="toolbar-group">
-              <label class="icon-btn" title="Node labels" aria-label="Toggle node labels"><input type="checkbox" id="showLabels" checked> Labels</label>
-              <label class="icon-btn" title="Edge labels" aria-label="Toggle edge labels"><input type="checkbox" id="showEdgeLabels"> Edge Labels</label>
+              <button id="restartLayout" class="icon-btn" title="Re-run layout" aria-label="Re-run layout">⟳</button>
+              <button id="isolateToggle" class="icon-btn" title="Isolate selection and neighbours" aria-label="Isolate selection and neighbours" aria-pressed="false">◉</button>
+              <button id="hideUnrelatedEdges" class="icon-btn" title="Hide unrelated edges" aria-label="Hide unrelated edges" aria-pressed="false">⊘</button>
+              <button id="clearSelectionBtn" class="icon-btn" title="Clear selection" aria-label="Clear selection">✕</button>
             </div>
             <div class="toolbar-group">
+              <input id="graphSearch" type="search" class="graph-search" placeholder="Find node…" aria-label="Find a node by name or identifier" />
+            </div>
+            <div class="toolbar-group">
+              <label class="icon-btn" title="Node labels" aria-label="Toggle node labels"><input type="checkbox" id="showLabels" checked> Labels</label>
+              <label class="icon-btn" title="Edge labels" aria-label="Toggle edge labels"><input type="checkbox" id="showEdgeLabels"> Edge Labels</label>
+              <label class="icon-btn" title="Directional arrows" aria-label="Toggle directional arrows"><input type="checkbox" id="showArrows" checked> Arrows</label>
               <label class="icon-btn" title="Show legend" aria-label="Toggle legend"><input type="checkbox" id="showLegend" checked> Legend</label>
             </div>
             <div class="toolbar-group filter-group">
@@ -95,6 +105,7 @@
             <canvas id="graph" aria-label="Attack path graph" role="img"></canvas>
             <div id="graphStatus" class="graph-status" aria-live="polite" hidden></div>
             <div id="legend" class="legend overlay" aria-label="Graph legend"></div>
+            <div id="graphTooltip" class="graph-tooltip" role="tooltip" hidden></div>
             <aside class="panel" id="panel" role="complementary" aria-label="Inspector">
             <div class="panel-header">
               <h2 id="panelTitle">Inspector</h2>
@@ -108,6 +119,7 @@
             <section class="panel-body" id="panel-node" hidden>
               <h2 id="node-title"></h2>
               <dl id="node-props"></dl>
+              <p class="node-meta muted small">Connected entities: <span id="nodeConnected" class="count">0</span></p>
               <div class="panel-section">
                 <h3>Outgoing <span id="nodeOutCount" class="count"></span></h3>
                 <ul id="node-out" class="edges" role="list"></ul>
@@ -496,6 +508,8 @@
               <label><input type="checkbox" id="settingLabels" checked> Node labels</label>
               <label><input type="checkbox" id="settingEdgeLabels"> Edge labels</label>
               <label><input type="checkbox" id="settingLegend" checked> Legend</label>
+              <label><input type="checkbox" id="settingArrows" checked> Directional arrows</label>
+              <label><input type="checkbox" id="settingTooltips" checked> Hover tooltips</label>
               <label><input type="checkbox" id="settingPhysics" checked> Physics simulation</label>
               <label><input type="checkbox" id="settingReduceMotion" checked> Reduce motion</label>
             </fieldset>

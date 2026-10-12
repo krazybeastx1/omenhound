@@ -548,6 +548,42 @@ button.lock.unlocked:hover { background: rgba(0,255,200,.2); border-color: var(-
 .graph-status[hidden] { display: none; }
 .graph-status .spinner { width: 26px; height: 26px; border-width: 3px; }
 
+/* Graph toolbar extras */
+#graph { touch-action: none; }
+.graph-search { background: var(--bg-elevated); border: 1px solid var(--line); border-radius: var(--rad-md); color: var(--fg); padding: 6px 10px; font-size: var(--fs-sm); min-width: 170px; }
+.graph-search:focus { outline: none; border-color: var(--accent); }
+.icon-btn.active { background: var(--accent); border-color: var(--accent); color: #0b0e14; }
+.legend-arrow { width: 20px !important; height: 2px !important; border-radius: 1px !important; background: var(--muted) !important; position: relative; }
+.legend-arrow::after { content: ""; position: absolute; right: -1px; top: -3px; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+
+/* Hover tooltip over the canvas */
+.graph-tooltip {
+  position: absolute;
+  z-index: 6;
+  max-width: 320px;
+  padding: 8px 10px;
+  background: rgba(11, 16, 24, 0.96);
+  border: 1px solid var(--line);
+  border-radius: var(--rad-md);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+.graph-tooltip[hidden] { display: none; }
+.graph-tooltip .tt-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.graph-tooltip .tt-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.graph-tooltip .tt-title { color: var(--fg); font-weight: 600; font-size: var(--fs-sm); word-break: break-word; }
+.graph-tooltip .tt-kind { margin-left: auto; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-size: 9.5px; }
+.graph-tooltip .tt-props { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+.graph-tooltip .tt-props dt { color: var(--muted-strong); }
+.graph-tooltip .tt-props dd { margin: 0; color: var(--fg-dim); word-break: break-word; }
+
+/* Inspector: clickable connected entity */
+.edges .link-node { background: none; border: none; padding: 0; color: var(--fg-dim); font: inherit; font-size: var(--fs-sm); cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+.edges .link-node:hover { color: var(--accent); text-decoration: underline; }
+.node-meta { margin: var(--sp-2) 0 0; }
+
 /* Ingestion tabs */
 .ingestion-tabs { display: flex; gap: 4px; margin-bottom: var(--sp-4); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
 .tab-btn { background: transparent; border: none; color: var(--muted); padding: 8px 16px; border-radius: var(--rad-md); font-weight: 500; font-size: var(--fs-sm); position: relative; }

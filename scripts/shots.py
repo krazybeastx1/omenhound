@@ -33,8 +33,10 @@ if (!e) return null;
 const a = toScreen(byId.get(e.source)), b = toScreen(byId.get(e.target));
 const r = canvas.getBoundingClientRect();
 const x = r.left + (a.x + b.x) / 2, y = r.top + (a.y + b.y) / 2;
-const fire = (t) => canvas.dispatchEvent(new MouseEvent(t, {clientX: x, clientY: y, bubbles: true}));
-fire('mousedown'); fire('mouseup');
+const fire = (t, buttons) => canvas.dispatchEvent(new PointerEvent(t, {
+  clientX: x, clientY: y, bubbles: true, pointerId: 1, pointerType: 'mouse', button: 0, buttons,
+}));
+fire('pointerdown', 1); fire('pointerup', 0);
 return e.kind;
 """
 

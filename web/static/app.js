@@ -64,12 +64,35 @@ const DEFAULT_PREFS = {
   edgeLabels: false,
   legend: true,
   physics: true,
+  arrows: true,
+  tooltips: true,
   reduceMotion: false,
   autoRefresh: true,
   preserveSelection: true,
   refreshInterval: 0,
   theme: "dark",
   density: "comfortable",
+};
+
+// Force-directed layout tuning (Fruchterman–Reingold style). Distances are in
+// world units; the view transform maps world -> screen. `temp` (temperature)
+// bounds how far a node may move per iteration and cools to 0 when the layout
+// settles, at which point the animation loop stops entirely.
+const LAYOUT = {
+  ideal: 78,        // ideal edge length / node spacing
+  cutoffMul: 9,     // approximate repulsion cutoff = ideal * cutoffMul
+  cooling: 0.985,   // temperature decay per iteration
+  minTemp: 0.4,     // below this the simulation is considered stable
+  maxIter: 3,       // simulation iterations per animation frame
+  settleIters: 450, // fast-forward iterations on load / re-layout
+  gravity: 0.008,   // pull toward origin so components do not drift apart
+  collidePad: 12,   // extra world units kept between node discs
+};
+
+// Base radius per node kind (world units), scaled by degree in loadGraph.
+const NODE_RADIUS = {
+  Domain: 12, Container: 7, Computer: 9, User: 8, Group: 8,
+  GPO: 8, OU: 8, Trust: 9, Base: 6,
 };
 
 // ---------------------------------------------------------------------------
@@ -82,14 +105,21 @@ const ctx = canvas ? canvas.getContext("2d") : null;
 let nodes = [];
 let edges = [];
 let byId = new Map();
-let alpha = 1;
+let adjacency = new Map();      // id -> { out: [], in: [], neighbors: [] }
+let temp = 0;                   // simulation temperature (0 == stable)
 let selectedNode = null;
 let selectedEdge = null;
+let hoverNode = null;
+let hoverEdge = null;
+let isolateMode = false;        // show only the selected node + neighbours
+let hideUnrelatedEdges = false; // dim edges not incident to the selection
+let matchIds = new Set();       // node ids highlighted by the graph search
+let screenIndex = new Map();    // screen-space grid, rebuilt in draw() for hit tests
 
 // view transform: screen = world * k + (x, y)
 let view = { x: 0, y: 0, k: 1 };
 
-const drag = { node: null, panning: false, moved: false, sx: 0, sy: 0, ox: 0, oy: 0 };
+const drag = { node: null, panning: false, moved: false, sx: 0, sy: 0, ox: 0, oy: 0, pin: false };
 
 let prefs = { ...DEFAULT_PREFS };
 let currentDomain = "";
@@ -196,9 +226,12 @@ function syncPrefsToControls() {
   set("showLabels", prefs.labels);
   set("showEdgeLabels", prefs.edgeLabels);
   set("showLegend", prefs.legend);
+  set("showArrows", prefs.arrows);
   set("settingLabels", prefs.labels);
   set("settingEdgeLabels", prefs.edgeLabels);
   set("settingLegend", prefs.legend);
+  set("settingArrows", prefs.arrows);
+  set("settingTooltips", prefs.tooltips);
   set("settingPhysics", prefs.physics);
   set("settingReduceMotion", prefs.reduceMotion);
   set("settingAutoRefresh", prefs.autoRefresh);
@@ -215,7 +248,7 @@ function applyPrefs() {
   document.body.classList.toggle("reduce-motion", !!prefs.reduceMotion);
   const legendEl = document.getElementById("legend");
   if (legendEl) legendEl.classList.toggle("visible", !!prefs.legend && nodes.length > 0);
-  draw();
+  requestRender();
 }
 
 function scheduleAutoRefresh() {
@@ -230,17 +263,27 @@ function scheduleAutoRefresh() {
 
 function resize() {
   if (!canvas) return;
-  const parent = canvas.parentElement;
-  if (!parent) return;
-  const r = parent.getBoundingClientRect();
+  // Measure the canvas' own box (CSS drives its size via flex), never the
+  // parent's — the parent also contains the Inspector panel.
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, r.width * dpr);
-  canvas.height = Math.max(1, r.height * dpr);
-  canvas.style.width = r.width + "px";
-  canvas.style.height = r.height + "px";
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
   if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  requestRender();
 }
-window.addEventListener("resize", resize);
+let resizeRaf = null;
+window.addEventListener("resize", () => {
+  if (resizeRaf) return;
+  resizeRaf = requestAnimationFrame(() => { resizeRaf = null; resize(); });
+});
+if (typeof ResizeObserver !== "undefined" && canvas && canvas.parentElement) {
+  try { new ResizeObserver(() => resize()).observe(canvas.parentElement); } catch (_) { /* ignore */ }
+}
 
 function toScreen(p) {
   return { x: p.x * view.k + view.x, y: p.y * view.k + view.y };
@@ -279,23 +322,40 @@ async function loadGraph() {
     const prevEdge = selectedEdge ? { source: selectedEdge.source, target: selectedEdge.target, kind: selectedEdge.kind } : null;
 
     const old = byId;
+    const count = Math.max(1, rawNodes.length);
+    // Golden-angle spiral start: nodes begin evenly spread rather than on one
+    // tiny circle, so they no longer explode into a single dense cluster.
+    const radius = 40 + count * 3;
     nodes = rawNodes.map((n, i) => {
       const prior = old.get(n.id);
+      const t = i * 2.39996323; // golden angle
+      const rr = Math.sqrt((i + 0.5) / count) * radius;
       return {
         ...n,
-        x: prior ? prior.x : Math.cos(i) * 140 + (Math.random() - 0.5) * 60,
-        y: prior ? prior.y : Math.sin(i) * 140 + (Math.random() - 0.5) * 60,
-        vx: prior ? prior.vx : 0,
-        vy: prior ? prior.vy : 0,
+        kind: n.kind || "Base",
+        x: prior ? prior.x : Math.cos(t) * rr,
+        y: prior ? prior.y : Math.sin(t) * rr,
+        vx: 0, vy: 0,
+        fixed: prior ? !!prior.fixed : false,
+        r: NODE_RADIUS[n.kind] || 8,
         hidden: false,
         dim: false,
+        match: false,
       };
     });
-    edges = (g.edges || []).map((e) => ({ ...e, source: String(e.source), target: String(e.target) }));
+    edges = (g.edges || []).map((e) => ({ ...e, source: String(e.source), target: String(e.target), kind: e.kind || "Related" }));
     byId = new Map(nodes.map((n) => [n.id, n]));
     edges = edges.filter((e) => byId.has(e.source) && byId.has(e.target));
 
-    alpha = 1;
+    buildAdjacency();
+
+    // Size nodes by degree so hubs stand out, and re-heat the simulation.
+    for (const n of nodes) {
+      const deg = degreeOf(n.id);
+      n.r = (NODE_RADIUS[n.kind] || 8) * (1 + Math.min(1, deg / 14) * 0.7);
+    }
+    isolateMode = false;
+    temp = Math.max(40, (canvas ? canvas.clientWidth : 900) / 7);
 
     const statsEl = document.getElementById("stats");
     if (statsEl) statsEl.textContent = `${nodes.length} nodes · ${edges.length} edges`;
@@ -324,6 +384,38 @@ async function loadGraph() {
   }
 }
 
+// Build the adjacency index once per load so the Inspector, neighbour
+// highlighting and isolation answer in O(1) instead of scanning every edge.
+function buildAdjacency() {
+  adjacency = new Map();
+  for (const n of nodes) adjacency.set(n.id, { out: [], in: [], neighbors: [] });
+  for (const e of edges) {
+    const a = adjacency.get(e.source), b = adjacency.get(e.target);
+    if (a) a.out.push(e);
+    if (b) b.in.push(e);
+  }
+  for (const [id, rec] of adjacency) {
+    const set = new Set();
+    for (const e of rec.out) set.add(e.target);
+    for (const e of rec.in) set.add(e.source);
+    set.delete(id);
+    rec.neighbors = [...set];
+  }
+}
+
+function degreeOf(id) {
+  const rec = adjacency.get(id);
+  return rec ? rec.out.length + rec.in.length : 0;
+}
+
+// The node plus its direct neighbours (used for highlight and isolation).
+function neighborhood(node) {
+  const ids = new Set([node.id]);
+  const rec = adjacency.get(node.id);
+  if (rec) for (const nid of rec.neighbors) ids.add(nid);
+  return ids;
+}
+
 function renderLegend() {
   const legendEl = document.getElementById("legend");
   if (!legendEl) return;
@@ -337,6 +429,9 @@ function renderLegend() {
       const info = EDGE_CATEGORIES[c] || { label: "Other", color: EDGE_COLOR_DEFAULT };
       return `<span class="edge-legend"><i style="background:${info.color}"></i>${esc(info.label)}</span>`;
     }).join("");
+  }
+  if (cats.length && prefs.arrows) {
+    html += `<span class="legend-group">Direction</span><span class="edge-legend"><i class="legend-arrow"></i>source → target</span>`;
   }
   legendEl.innerHTML = html;
   legendEl.classList.toggle("visible", !!prefs.legend && nodes.length > 0);
@@ -359,42 +454,164 @@ function populateFilters() {
   }
 }
 
-function step() {
-  const vis = nodes.filter((n) => !nodeHidden(n));
-  const n = vis.length;
-  // Repulsion is O(n^2); skip it for very large graphs so the UI stays responsive.
-  if (n <= 400) {
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const a = vis[i], b = vis[j];
-        const dx = a.x - b.x, dy = a.y - b.y;
-        const d2 = dx * dx + dy * dy || 0.01;
-        const d = Math.sqrt(d2);
-        const f = 1800 / d2;
-        const fx = (dx / d) * f, fy = (dy / d) * f;
-        a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
-      }
+// ---- spatial grid (approximate repulsion + collision) ----
+
+function buildGrid(list, cell) {
+  const g = new Map();
+  for (const n of list) {
+    const key = Math.floor(n.x / cell) + "|" + Math.floor(n.y / cell);
+    let bucket = g.get(key);
+    if (!bucket) { bucket = []; g.set(key, bucket); }
+    bucket.push(n);
+  }
+  return { g, cell };
+}
+
+function gridNeighbors(grid, n) {
+  const { g, cell } = grid;
+  const cx = Math.floor(n.x / cell), cy = Math.floor(n.y / cell);
+  const out = [];
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const bucket = g.get((cx + i) + "|" + (cy + j));
+      if (bucket) for (const o of bucket) out.push(o);
     }
   }
+  return out;
+}
+
+// One Fruchterman–Reingold iteration. Repulsion is limited to a neighbourhood
+// cutoff via the spatial grid, so the cost scales with density rather than
+// O(n^2) — hundreds/thousands of nodes stay interactive.
+function step() {
+  const vis = visibleNodes();
+  const n = vis.length;
+  if (n === 0) return;
+  const k = LAYOUT.ideal;
+  const cutoff = k * LAYOUT.cutoffMul;
+  const cutoff2 = cutoff * cutoff;
+  const grid = buildGrid(vis, cutoff);
+  const disp = new Map();
+  for (const node of vis) disp.set(node, { x: 0, y: 0 });
+
+  // 1. repulsive forces (k^2 / d)
+  for (const node of vis) {
+    const out = disp.get(node);
+    for (const other of gridNeighbors(grid, node)) {
+      if (other === node) continue;
+      let dx = node.x - other.x, dy = node.y - other.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 > cutoff2) continue;
+      if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 0.01; }
+      const d = Math.sqrt(d2);
+      const f = (k * k) / d;
+      out.x += (dx / d) * f;
+      out.y += (dy / d) * f;
+    }
+  }
+
+  // 2. attractive forces (d^2 / k) along real relationships
   for (const e of edges) {
     if (edgeHidden(e)) continue;
     const a = byId.get(e.source), b = byId.get(e.target);
-    if (!a || !b) continue;
-    const dx = b.x - a.x, dy = b.y - a.y;
+    if (!a || !b || nodeHidden(a) || nodeHidden(b)) continue;
+    const da = disp.get(a), db = disp.get(b);
+    if (!da || !db) continue;
+    let dx = a.x - b.x, dy = a.y - b.y;
     const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-    const f = (d - 110) * 0.02;
+    const f = (d * d) / k;
     const fx = (dx / d) * f, fy = (dy / d) * f;
-    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    da.x -= fx; da.y -= fy; db.x += fx; db.y += fy;
   }
+
+  // 3. weak gravity toward the origin keeps disconnected parts together
   for (const node of vis) {
-    node.vx += -node.x * 0.002;
-    node.vy += -node.y * 0.002;
-    node.x += node.vx * alpha;
-    node.y += node.vy * alpha;
-    node.vx *= 0.85;
-    node.vy *= 0.85;
+    const out = disp.get(node);
+    out.x -= node.x * LAYOUT.gravity * k;
+    out.y -= node.y * LAYOUT.gravity * k;
   }
-  alpha *= 0.99;
+
+  // 4. integrate, bounded by temperature; pinned nodes never move
+  for (const node of vis) {
+    if (node.fixed) continue;
+    const out = disp.get(node);
+    const mag = Math.hypot(out.x, out.y) || 0.01;
+    const lim = Math.min(mag, temp) / mag;
+    node.x += out.x * lim;
+    node.y += out.y * lim;
+  }
+
+  resolveCollisions(vis, grid);
+  temp *= LAYOUT.cooling;
+}
+
+// Push overlapping discs apart so labels/entities never stack on one spot.
+function resolveCollisions(vis, grid) {
+  for (const node of vis) {
+    for (const other of gridNeighbors(grid, node)) {
+      if (other === node) continue;
+      let dx = node.x - other.x, dy = node.y - other.y;
+      let d2 = dx * dx + dy * dy;
+      const minD = node.r + other.r + LAYOUT.collidePad;
+      if (d2 >= minD * minD) continue;
+      if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 0.01; }
+      const d = Math.sqrt(d2);
+      const push = (minD - d) * 0.5;
+      const ux = dx / d, uy = dy / d;
+      if (!node.fixed) { node.x += ux * push; node.y += uy * push; }
+      if (!other.fixed) { other.x -= ux * push; other.y -= uy * push; }
+    }
+  }
+}
+
+// ---- label helpers ----
+
+function truncate(s, n) {
+  s = String(s == null ? "" : s);
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function roundRect(c, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x + rr, y);
+  c.arcTo(x + w, y, x + w, y + h, rr);
+  c.arcTo(x + w, y + h, x, y + h, rr);
+  c.arcTo(x, y + h, x, y, rr);
+  c.arcTo(x, y, x + w, y, rr);
+  c.closePath();
+}
+
+// Draw a translucent plate behind text so labels stay readable over edges.
+function labelPlate(c, x, y, text, align) {
+  const wpx = c.measureText(text).width;
+  const pad = 3;
+  const left = align === "left" ? x - pad : x - wpx / 2 - pad;
+  c.save();
+  c.globalAlpha *= 0.78;
+  c.fillStyle = "rgba(9,13,20,0.92)";
+  roundRect(c, left, y - 7, wpx + pad * 2, 14, 4);
+  c.fill();
+  c.restore();
+}
+
+function drawArrow(c, ax, ay, bx, by, color, alpha) {
+  const dx = bx - ax, dy = by - ay;
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d, uy = dy / d;
+  const s = Math.max(6, Math.min(12, 7 * Math.max(0.6, Math.min(1.8, view.k))));
+  const tipX = bx - ux * s * 0.9, tipY = by - uy * s * 0.9;
+  const px = -uy, py = ux;
+  c.save();
+  c.globalAlpha = Math.max(0, Math.min(1, alpha));
+  c.fillStyle = color;
+  c.beginPath();
+  c.moveTo(tipX + ux * s * 0.9, tipY + uy * s * 0.9);
+  c.lineTo(tipX + px * s * 0.5, tipY + py * s * 0.5);
+  c.lineTo(tipX - px * s * 0.5, tipY - py * s * 0.5);
+  c.closePath();
+  c.fill();
+  c.restore();
 }
 
 function draw() {
@@ -403,89 +620,211 @@ function draw() {
   if (w === 0 || h === 0) return;
   ctx.clearRect(0, 0, w, h);
 
-  // edges
-  ctx.lineWidth = 1.2;
+  // Highlight set: the selected node's neighbourhood, or an edge's endpoints.
+  let focus = null;
+  if (selectedNode) focus = neighborhood(selectedNode);
+  else if (selectedEdge) focus = new Set([selectedEdge.source, selectedEdge.target]);
+
+  const k = view.k;
+
+  // Project every visible node once and build a screen-space grid for hit tests.
+  screenIndex = new Map();
+  const cellSize = 32;
+  for (const node of nodes) {
+    if (nodeHidden(node)) { node._sx = null; continue; }
+    const p = toScreen(node);
+    node._sx = p.x; node._sy = p.y;
+    node._sr = Math.max(3.5, node.r * k);
+    const key = Math.floor(p.x / cellSize) + "|" + Math.floor(p.y / cellSize);
+    let bucket = screenIndex.get(key);
+    if (!bucket) { bucket = []; screenIndex.set(key, bucket); }
+    bucket.push(node);
+  }
+  screenIndex._cell = cellSize;
+
+  // ---- edges ----
+  ctx.lineCap = "round";
   for (const e of edges) {
     if (edgeHidden(e)) continue;
-    const a = toScreen(byId.get(e.source));
-    const b = toScreen(byId.get(e.target));
-    const sel = selectedEdge && selectedEdge.source === e.source && selectedEdge.target === e.target && selectedEdge.kind === e.kind;
-    ctx.strokeStyle = sel ? "#00ff88" : edgeColor(e.kind);
-    ctx.globalAlpha = sel ? 1 : 0.5;
+    const a = byId.get(e.source), b = byId.get(e.target);
+    if (!a || !b || a._sx == null || b._sx == null) continue;
+    const ax = a._sx, ay = a._sy, bx = b._sx, by = b._sy;
+    if (Math.max(ax, bx) < -40 || Math.min(ax, bx) > w + 40 || Math.max(ay, by) < -40 || Math.min(ay, by) > h + 40) continue;
+
+    const isSel = selectedEdge === e;
+    const isHover = hoverEdge === e;
+    const incident = !!selectedNode && (e.source === selectedNode.id || e.target === selectedNode.id);
+    const highlighted = isSel || isHover || incident || (focus && focus.has(e.source) && focus.has(e.target));
+    const dimmed = (focus && !highlighted) || (hideUnrelatedEdges && !incident && !isSel);
+
+    ctx.strokeStyle = isSel ? "#ffffff" : edgeColor(e.kind);
+    ctx.lineWidth = isSel ? 2.6 : isHover ? 2.2 : incident ? 1.8 : 1.1;
+    ctx.globalAlpha = dimmed ? 0.05 : (isSel || isHover || incident) ? 0.95 : 0.42;
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
     ctx.stroke();
+
+    if (prefs.arrows && (highlighted || (!dimmed && k >= 1.6))) {
+      drawArrow(ctx, ax, ay, bx, by, ctx.strokeStyle, (isSel || isHover || incident) ? 0.95 : 0.4);
+    }
   }
   ctx.globalAlpha = 1;
 
-  // edge labels (explicit toggle; auto-show when zoomed in)
-  if (prefs.edgeLabels || view.k > 1.2) {
-    ctx.save();
-    ctx.font = "10px ui-sans-serif,system-ui,sans-serif";
-    ctx.fillStyle = "rgba(230,233,240,0.8)";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    for (const e of edges) {
-      if (edgeHidden(e)) continue;
-      const a = toScreen(byId.get(e.source));
-      const b = toScreen(byId.get(e.target));
-      ctx.fillText(e.kind, (a.x + b.x) / 2, (a.y + b.y) / 2);
-    }
-    ctx.restore();
+  // ---- edge labels (only relevant / zoomed; capped) ----
+  const edgeBudget = (prefs.edgeLabels && k >= 0.9) || k >= 2.2 ? 60 : 0;
+  let edgeLabelsDrawn = 0;
+  ctx.font = "10px ui-sans-serif,system-ui,sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const e of edges) {
+    if (edgeHidden(e)) continue;
+    const isSel = selectedEdge === e, isHover = hoverEdge === e;
+    if (!isSel && !isHover && edgeLabelsDrawn >= edgeBudget) continue;
+    const a = byId.get(e.source), b = byId.get(e.target);
+    if (!a || !b || a._sx == null || b._sx == null) continue;
+    edgeLabelsDrawn++;
+    const mx = (a._sx + b._sx) / 2, my = (a._sy + b._sy) / 2;
+    const text = truncate(e.kind, 24);
+    labelPlate(ctx, mx, my, text);
+    ctx.fillStyle = isSel ? "#ffffff" : "rgba(226,232,240,0.95)";
+    ctx.fillText(text, mx, my);
   }
 
-  // nodes
+  // ---- nodes ----
   for (const node of nodes) {
-    if (nodeHidden(node)) continue;
-    const p = toScreen(node);
-    const r = (node.kind === "Domain" ? 12 : 8) * Math.max(0.6, Math.min(1.6, view.k));
-    ctx.globalAlpha = node.dim ? 0.15 : 1;
+    if (node._sx == null) continue;
+    const p = { x: node._sx, y: node._sy };
+    if (p.x < -40 || p.x > w + 40 || p.y < -40 || p.y > h + 40) continue;
+    const r = node._sr;
+    const isSel = selectedNode === node;
+    const isHover = hoverNode === node;
+    const isMatch = matchIds.has(node.id);
+    const dim = (focus && !focus.has(node.id)) || (node.dim && !isSel && !isHover);
+
+    ctx.globalAlpha = dim ? 0.12 : 1;
     ctx.beginPath();
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
     ctx.fillStyle = COLORS[node.kind] || "#888";
     ctx.fill();
-    if (selectedNode === node) {
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = "#fff";
+
+    if (isSel || isHover || isMatch) {
+      ctx.lineWidth = isSel ? 3 : 2;
+      ctx.strokeStyle = isSel ? "#ffffff" : isMatch ? "#ffd600" : "#cbd5e1";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 3, 0, Math.PI * 2);
       ctx.stroke();
-    }
-    if (prefs.labels && view.k > 0.7 && !node.dim) {
-      ctx.fillStyle = "rgba(230,233,240,0.85)";
-      ctx.font = "11px ui-sans-serif,system-ui,sans-serif";
-      ctx.fillText(nodeLabel(node), p.x + r + 3, p.y + 3);
+    } else if (node.fixed) {
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 2, 0, Math.PI * 2);
+      ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
+
+  // ---- node labels ----
+  const wantAll = prefs.labels && k >= 1.15;
+  const labelList = [];
+  for (const node of nodes) {
+    if (node._sx == null) continue;
+    const isSel = selectedNode === node, isHover = hoverNode === node;
+    const isNeighbor = focus && focus.has(node.id) && !isSel;
+    const isMatch = matchIds.has(node.id);
+    const important = isSel || isHover || isMatch || isNeighbor;
+    if (!important && (!wantAll || node.dim || (focus && !focus.has(node.id)))) continue;
+    labelList.push({ node, important, deg: degreeOf(node.id) });
+  }
+  labelList.sort((a, b) => (a.important === b.important ? b.deg - a.deg : a.important ? 1 : -1));
+  const cap = k >= 2 ? 250 : 70;
+  let drawn = 0;
+  ctx.font = "11px ui-sans-serif,system-ui,sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (const item of labelList) {
+    if (!item.important && drawn >= cap) break;
+    drawn++;
+    const node = item.node;
+    const text = truncate(nodeLabel(node), k >= 1.4 ? 34 : 24);
+    const tx = node._sx + node._sr + 4, ty = node._sy;
+    labelPlate(ctx, tx, ty, text, "left");
+    ctx.fillStyle = item.important ? "#f1f5f9" : "rgba(226,232,240,0.85)";
+    ctx.fillText(text, tx, ty);
+  }
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
-function loop() {
-  if (alpha > 0.001 && prefs.physics) {
-    for (let i = 0; i < 3; i++) step();
+// ---- animation loop (runs only while the layout is hot or on interaction) ----
+
+let rafId = null;
+
+function requestRender() {
+  if (rafId === null && typeof requestAnimationFrame !== "undefined") rafId = requestAnimationFrame(frame);
+}
+
+function frame() {
+  rafId = null;
+  let stepped = false;
+  if (prefs.physics && temp > LAYOUT.minTemp && nodes.length) {
+    const iters = nodes.length > 800 ? 1 : LAYOUT.maxIter;
+    for (let i = 0; i < iters; i++) {
+      step();
+      if (temp <= LAYOUT.minTemp) break;
+    }
+    stepped = true;
   }
   draw();
-  requestAnimationFrame(loop);
+  if (stepped && temp > LAYOUT.minTemp) requestRender();
 }
 
-// Run initial layout off-screen (fast-forward physics) before first render.
+// Fast-forward the simulation off the animation clock for the initial view.
 function settleLayout() {
-  for (let i = 0; i < 200; i++) {
+  if (!nodes.length) { temp = 0; draw(); return; }
+  const iters = nodes.length > 1500 ? 140 : LAYOUT.settleIters;
+  for (let i = 0; i < iters; i++) {
     step();
-    if (alpha <= 0.01) break;
+    if (temp <= LAYOUT.minTemp) break;
   }
-  alpha = 0.1;
+  temp = 0;
+  draw();
+}
+
+// Re-run the layout from scratch: unpin nodes and reseed positions on a spiral.
+function restartLayout() {
+  const count = Math.max(1, nodes.length);
+  const radius = 40 + count * 3;
+  nodes.forEach((n, i) => {
+    const t = i * 2.39996323;
+    const rr = Math.sqrt((i + 0.5) / count) * radius;
+    n.x = Math.cos(t) * rr;
+    n.y = Math.sin(t) * rr;
+    n.vx = 0; n.vy = 0; n.fixed = false;
+  });
+  temp = Math.max(40, (canvas ? canvas.clientWidth : 900) / 7);
+  requestRender();
 }
 
 // ---- interaction ----
 
+// Screen-space hit test using the grid rebuilt by draw(). Searches a 5x5 cell
+// window so large and overlapping nodes stay reliably clickable.
 function hitNode(sx, sy) {
-  const scaledRadius = 14 / Math.max(0.5, view.k);
-  let best = null, bestD = scaledRadius;
-  for (const n of nodes) {
-    if (nodeHidden(n)) continue;
-    const p = toScreen(n);
-    const d = Math.hypot(p.x - sx, p.y - sy);
-    if (d < bestD) { bestD = d; best = n; }
+  if (!screenIndex || screenIndex.size === 0) return null;
+  const cell = screenIndex._cell || 32;
+  const cx = Math.floor(sx / cell), cy = Math.floor(sy / cell);
+  let best = null, bestD = Infinity;
+  for (let i = -2; i <= 2; i++) {
+    for (let j = -2; j <= 2; j++) {
+      const bucket = screenIndex.get((cx + i) + "|" + (cy + j));
+      if (!bucket) continue;
+      for (const n of bucket) {
+        const d = Math.hypot(n._sx - sx, n._sy - sy);
+        const hitR = (n._sr || 6) + 6;
+        if (d <= hitR && d < bestD) { bestD = d; best = n; }
+      }
+    }
   }
   return best;
 }
@@ -499,13 +838,16 @@ function distToSeg(px, py, ax, ay, bx, by) {
 }
 
 function hitEdge(sx, sy) {
-  const scaledDist = 6 / Math.max(0.5, view.k);
-  let best = null, bestD = scaledDist;
+  let best = null, bestD = 6 / Math.max(0.4, view.k);
   for (const e of edges) {
     if (edgeHidden(e)) continue;
-    const a = toScreen(byId.get(e.source));
-    const b = toScreen(byId.get(e.target));
-    const d = distToSeg(sx, sy, a.x, a.y, b.x, b.y);
+    const a = byId.get(e.source), b = byId.get(e.target);
+    if (!a || !b) continue;
+    const ax = a._sx == null ? toScreen(a).x : a._sx;
+    const ay = a._sy == null ? toScreen(a).y : a._sy;
+    const bx = b._sx == null ? toScreen(b).x : b._sx;
+    const by = b._sy == null ? toScreen(b).y : b._sy;
+    const d = distToSeg(sx, sy, ax, ay, bx, by);
     if (d < bestD) { bestD = d; best = e; }
   }
   return best;
@@ -516,37 +858,100 @@ function getCanvasCoords(ev) {
   return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
 }
 
+// ---- hover tooltip ----
+
+const tooltip = document.getElementById("graphTooltip");
+
+function tooltipRows(node) {
+  return [
+    ["sam", node.sam_account_name || ""],
+    ["domain", node.domain || ""],
+    ["dn", node.distinguished_name || ""],
+    ...Object.entries(node.props || {}),
+  ].filter(([, v]) => v !== "" && v != null);
+}
+
+function positionTooltip(ev, node) {
+  if (!tooltip) return;
+  if (!node || !prefs.tooltips) { tooltip.hidden = true; return; }
+  const rows = tooltipRows(node).slice(0, 6);
+  tooltip.innerHTML = `<div class="tt-head"><span class="tt-dot" style="background:${COLORS[node.kind] || "#888"}"></span>`
+    + `<span class="tt-title">${esc(nodeLabel(node))}</span>`
+    + `<span class="tt-kind">${esc(node.kind)}</span></div>`
+    + (rows.length ? `<dl class="tt-props">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(truncate(String(v), 48))}</dd>`).join("")}</dl>` : "");
+  tooltip.hidden = false;
+  const host = tooltip.offsetParent || document.body;
+  const br = host.getBoundingClientRect();
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  let x = ev.clientX - br.left + 16, y = ev.clientY - br.top + 16;
+  if (x + tw > br.width - 8) x = ev.clientX - br.left - tw - 16;
+  if (y + th > br.height - 8) y = ev.clientY - br.top - th - 16;
+  tooltip.style.left = Math.max(4, x) + "px";
+  tooltip.style.top = Math.max(4, y) + "px";
+}
+
+function hideTooltip() { if (tooltip) tooltip.hidden = true; }
+
+// Pointer Events unify mouse, trackpad and touch, and pointer capture keeps a
+// drag bound to the canvas even when the cursor leaves it.
 if (canvas) {
-  canvas.addEventListener("mousedown", (ev) => {
+  canvas.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    if (canvas.setPointerCapture) { try { canvas.setPointerCapture(ev.pointerId); } catch (_) { /* ignore */ } }
     const c = getCanvasCoords(ev);
     const n = hitNode(c.x, c.y);
     drag.moved = false;
     drag.sx = c.x; drag.sy = c.y; drag.ox = view.x; drag.oy = view.y;
-    if (n) { drag.node = n; n.fixed = true; }
-    else { drag.panning = true; canvas.classList.add("dragging"); }
-  });
-
-  canvas.addEventListener("mousemove", (ev) => {
-    const c = getCanvasCoords(ev);
-    if (drag.node) {
-      const w = toWorld(c.x, c.y);
-      drag.node.x = w.x; drag.node.y = w.y;
-      drag.node.vx = 0; drag.node.vy = 0;
-      drag.moved = true;
-      alpha = Math.max(alpha, 0.15);
-    } else if (drag.panning) {
-      view.x = drag.ox + (c.x - drag.sx);
-      view.y = drag.oy + (c.y - drag.sy);
-      drag.moved = true;
+    if (n) {
+      drag.node = n;
+      drag.pin = !!n.fixed;
+      n.fixed = true; // pin while dragging so physics cannot fight the cursor
+      drag.panning = false;
+      hideTooltip();
+    } else {
+      drag.node = null;
+      drag.panning = true;
+      canvas.classList.add("dragging");
     }
   });
 
-  canvas.addEventListener("mouseup", (ev) => {
+  canvas.addEventListener("pointermove", (ev) => {
+    const c = getCanvasCoords(ev);
+    if (drag.node) {
+      const wpt = toWorld(c.x, c.y);
+      drag.node.x = wpt.x; drag.node.y = wpt.y;
+      drag.node.vx = 0; drag.node.vy = 0;
+      drag.moved = true;
+      if (temp < 6) temp = 6; // let neighbours relax around the dragged node
+      requestRender();
+      return;
+    }
+    if (drag.panning) {
+      view.x = drag.ox + (c.x - drag.sx);
+      view.y = drag.oy + (c.y - drag.sy);
+      drag.moved = true;
+      requestRender();
+      return;
+    }
+    const n = hitNode(c.x, c.y);
+    const e = n ? null : hitEdge(c.x, c.y);
+    if (n !== hoverNode || e !== hoverEdge) {
+      hoverNode = n; hoverEdge = e;
+      canvas.style.cursor = n || e ? "pointer" : "grab";
+      requestRender();
+    }
+    positionTooltip(ev, n);
+  });
+
+  const endDrag = (ev) => {
     const c = getCanvasCoords(ev);
     canvas.classList.remove("dragging");
     if (drag.node) {
-      drag.node.fixed = false;
+      // Keep the user's manual position: a dragged node stays pinned, so later
+      // interactions never snap it back.
+      drag.node.fixed = drag.moved ? true : drag.pin;
       if (!drag.moved) selectNode(drag.node);
+      else { temp = Math.max(temp, 4); requestRender(); }
       drag.node = null;
     } else if (drag.panning) {
       if (!drag.moved) {
@@ -560,75 +965,35 @@ if (canvas) {
       }
       drag.panning = false;
     }
+    if (canvas.releasePointerCapture && ev.pointerId != null) {
+      try { canvas.releasePointerCapture(ev.pointerId); } catch (_) { /* ignore */ }
+    }
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  // Double-click a node to focus + expand its neighbourhood.
+  canvas.addEventListener("dblclick", (ev) => {
+    const c = getCanvasCoords(ev);
+    const n = hitNode(c.x, c.y);
+    if (n) { selectNode(n); focusNode(n); }
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    if (!drag.node && !drag.panning) { hoverNode = null; hoverEdge = null; hideTooltip(); requestRender(); }
   });
 
   canvas.addEventListener("wheel", (ev) => {
     ev.preventDefault();
     const c = getCanvasCoords(ev);
-    const before = toWorld(c.x, c.y);
     const factor = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
-    view.k = Math.max(0.15, Math.min(4, view.k * factor));
-    const after = toWorld(c.x, c.y);
-    view.x += (after.x - before.x) * view.k;
-    view.y += (after.y - before.y) * view.k;
+    zoomBy(factor, c.x, c.y);
   }, { passive: false });
-
-  canvas.addEventListener("touchstart", (ev) => {
-    if (ev.touches.length === 1) {
-      const c = getCanvasCoords(ev.touches[0]);
-      const n = hitNode(c.x, c.y);
-      drag.moved = false;
-      drag.sx = c.x; drag.sy = c.y; drag.ox = view.x; drag.oy = view.y;
-      if (n) { drag.node = n; n.fixed = true; }
-      else { drag.panning = true; canvas.classList.add("dragging"); }
-      ev.preventDefault();
-    }
-  }, { passive: false });
-
-  canvas.addEventListener("touchmove", (ev) => {
-    if (ev.touches.length === 1) {
-      const c = getCanvasCoords(ev.touches[0]);
-      if (drag.node) {
-        const w = toWorld(c.x, c.y);
-        drag.node.x = w.x; drag.node.y = w.y;
-        drag.node.vx = 0; drag.node.vy = 0;
-        drag.moved = true;
-        alpha = Math.max(alpha, 0.15);
-      } else if (drag.panning) {
-        view.x = drag.ox + (c.x - drag.sx);
-        view.y = drag.oy + (c.y - drag.sy);
-        drag.moved = true;
-      }
-      ev.preventDefault();
-    }
-  }, { passive: false });
-
-  canvas.addEventListener("touchend", (ev) => {
-    let sx = drag.sx, sy = drag.sy;
-    if (ev.changedTouches.length === 1) {
-      const c = getCanvasCoords(ev.changedTouches[0]);
-      sx = c.x; sy = c.y;
-    }
-    canvas.classList.remove("dragging");
-    if (drag.node) {
-      drag.node.fixed = false;
-      if (!drag.moved) selectNode(drag.node);
-      drag.node = null;
-    } else if (drag.panning) {
-      if (!drag.moved) {
-        const n = hitNode(sx, sy);
-        if (n) selectNode(n);
-        else {
-          const e = hitEdge(sx, sy);
-          if (e) selectEdge(e);
-        }
-      }
-      drag.panning = false;
-    }
-  });
 }
 
-function fitView() {
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function fitView(padding = 60) {
   const vis = visibleNodes();
   if (vis.length === 0) return;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -638,46 +1003,88 @@ function fitView() {
   }
   if (!isFinite(minX)) return;
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const scaleX = w / Math.max(1, maxX - minX + 100);
-  const scaleY = h / Math.max(1, maxY - minY + 100);
-  view.k = Math.min(scaleX, scaleY, 3);
+  const spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+  const kx = (w - padding * 2) / spanX, ky = (h - padding * 2) / spanY;
+  view.k = clamp(Math.min(kx, ky), 0.12, 2.5);
   view.x = w / 2 - cx * view.k;
   view.y = h / 2 - cy * view.k;
+  requestRender();
 }
 
-function resetView() {
-  view = { x: 0, y: 0, k: 1 };
-  fitView();
+function resetView() { fitView(); }
+
+// Zoom about a screen anchor so the point under the cursor stays put.
+function zoomBy(factor, cx, cy) {
+  if (!canvas) return;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const px = cx == null ? w / 2 : cx, py = cy == null ? h / 2 : cy;
+  const before = toWorld(px, py);
+  view.k = clamp(view.k * factor, 0.08, 6);
+  view.x = px - before.x * view.k;
+  view.y = py - before.y * view.k;
+  requestRender();
+}
+
+function centerOn(node, kTarget) {
+  if (!canvas || !node) return;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (kTarget) view.k = clamp(kTarget, 0.12, 6);
+  view.x = w / 2 - node.x * view.k;
+  view.y = h / 2 - node.y * view.k;
+  requestRender();
 }
 
 function centerSelection() {
-  if (selectedNode) {
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    const p = toScreen(selectedNode);
-    view.x = w / 2 - p.x;
-    view.y = h / 2 - p.y;
-  } else if (selectedEdge) {
-    const a = toScreen(byId.get(selectedEdge.source));
-    const b = toScreen(byId.get(selectedEdge.target));
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    view.x = w / 2 - (a.x + b.x) / 2;
-    view.y = h / 2 - (a.y + b.y) / 2;
+  if (selectedNode) centerOn(selectedNode);
+  else if (selectedEdge) {
+    const a = byId.get(selectedEdge.source), b = byId.get(selectedEdge.target);
+    if (a && b) centerOn({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   }
 }
 
-// Apply the toolbar node-kind / relationship filters and the search dimming.
+// Select a node and bring it into view (used by search, graph search, Inspector).
+function focusNode(node, kTarget) {
+  if (!node) return;
+  selectNode(node);
+  centerOn(node, kTarget || Math.max(view.k, 1.1));
+}
+
+// Isolate the selected node + neighbours (hides everything else) or restore.
+function toggleIsolate() {
+  if (!selectedNode && !selectedEdge) { toast("Select a node or edge first", "warn"); return; }
+  isolateMode = !isolateMode;
+  applyFilters();
+  if (isolateMode && selectedNode) centerSelection();
+  syncGraphControls();
+}
+
+function syncGraphControls() {
+  const iso = document.getElementById("isolateToggle");
+  if (iso) { iso.classList.toggle("active", isolateMode); iso.setAttribute("aria-pressed", isolateMode ? "true" : "false"); }
+  const he = document.getElementById("hideUnrelatedEdges");
+  if (he) { he.classList.toggle("active", hideUnrelatedEdges); he.setAttribute("aria-pressed", hideUnrelatedEdges ? "true" : "false"); }
+}
+
+// Apply the toolbar node-kind filter, isolate mode and the header search.
 function applyFilters() {
   const nodeKind = val("nodeKindFilter");
   const searchQ = val("search").toLowerCase();
+  const anchor = isolateMode ? (selectedNode || hoverNode) : null;
+  const keep = anchor ? neighborhood(anchor) : null;
   for (const n of nodes) {
-    n.hidden = !!(nodeKind && n.kind !== nodeKind);
-    const hay = `${n.name || ""} ${n.sam_account_name || ""} ${n.id}`.toLowerCase();
-    n.dim = searchQ !== "" && !hay.includes(searchQ);
+    const kindHide = !!(nodeKind && n.kind !== nodeKind);
+    const isolateHide = keep ? !keep.has(n.id) : false;
+    n.hidden = kindHide || isolateHide;
+    const hay = `${n.name || ""} ${n.sam_account_name || ""} ${n.id} ${n.kind || ""}`.toLowerCase();
+    n.match = matchIds.has(n.id);
+    n.dim = (searchQ !== "" && !hay.includes(searchQ)) || (keep ? !keep.has(n.id) : false);
   }
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = !(selectedNode || selectedEdge);
-  draw();
+  syncGraphControls();
+  requestRender();
 }
 
 // ---------------------------------------------------------------------------
@@ -694,9 +1101,12 @@ function show(id) {
 function clearSelection() {
   selectedNode = null;
   selectedEdge = null;
+  hoverEdge = null;
   show("panel-empty");
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = true;
+  if (isolateMode) applyFilters();
+  requestRender();
 }
 
 function selectNode(n) {
@@ -721,21 +1131,32 @@ function selectNode(n) {
     propsEl.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
   }
 
-  const out = edges.filter((e) => e.source === n.id);
-  const inc = edges.filter((e) => e.target === n.id);
+  const rec = adjacency.get(n.id) || { out: [], in: [], neighbors: [] };
+  const out = rec.out, inc = rec.in;
   const outEl = document.getElementById("node-out");
   const inEl = document.getElementById("node-in");
-  if (outEl) outEl.innerHTML = edgeList(out, "target");
-  if (inEl) inEl.innerHTML = edgeList(inc, "source");
+  if (outEl) outEl.innerHTML = edgeList(out, "target", "→");
+  if (inEl) inEl.innerHTML = edgeList(inc, "source", "←");
   const outCount = document.getElementById("nodeOutCount");
   const inCount = document.getElementById("nodeInCount");
   if (outCount) outCount.textContent = out.length;
   if (inCount) inCount.textContent = inc.length;
+  const connEl = document.getElementById("nodeConnected");
+  if (connEl) connEl.textContent = rec.neighbors.length;
 
-  for (const li of document.querySelectorAll("#node-out li,#node-in li")) {
+  // Clicking a relationship row inspects that edge...
+  for (const li of document.querySelectorAll("#node-out li[data-src],#node-in li[data-src]")) {
     li.addEventListener("click", () => {
       const e = edges.find((x) => x.source === li.dataset.src && x.target === li.dataset.tgt && x.kind === li.dataset.kind);
       if (e) selectEdge(e);
+    });
+  }
+  // ...clicking the connected entity selects + focuses that node in the graph.
+  for (const btn of document.querySelectorAll("#node-out [data-node],#node-in [data-node]")) {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const tgt = byId.get(btn.dataset.node);
+      if (tgt) focusNode(tgt);
     });
   }
 
@@ -747,15 +1168,17 @@ function selectNode(n) {
   }
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = false;
-  draw();
+  syncGraphControls();
+  requestRender();
 }
 
-function edgeList(list, other) {
+function edgeList(list, other, dir) {
   if (!list.length) return "<li class='muted'>none</li>";
   return list.map((e) => {
     const o = byId.get(e[other]);
     const name = o ? nodeLabel(o) : e[other];
-    return `<li data-src="${esc(e.source)}" data-tgt="${esc(e.target)}" data-kind="${esc(e.kind)}"><span class="k">${esc(e.kind)}</span> <span class="target">→ ${esc(name)}</span></li>`;
+    const link = `<button type="button" class="link-node" data-node="${esc(e[other])}" title="Select this entity">${esc(truncate(name, 26))}</button>`;
+    return `<li data-src="${esc(e.source)}" data-tgt="${esc(e.target)}" data-kind="${esc(e.kind)}" title="Click to inspect this relationship"><span class="k">${esc(e.kind)}</span> <span class="target">${dir} ${link}</span></li>`;
   }).join("");
 }
 
@@ -782,11 +1205,21 @@ async function selectEdge(e) {
   if (eventsEl) eventsEl.textContent = "";
   if (warningsEl) warningsEl.textContent = "";
   if (altsWrap) altsWrap.hidden = true;
-  if (propsEl) propsEl.innerHTML = Object.entries(e.props || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+  if (propsEl) {
+    const meta = [
+      ["type", e.kind],
+      ["source", a ? nodeLabel(a) : e.source],
+      ["target", b ? nodeLabel(b) : e.target],
+      ["direction", `${a ? nodeLabel(a) : e.source} → ${b ? nodeLabel(b) : e.target}`],
+    ].filter(([, v]) => v !== "" && v != null);
+    propsEl.innerHTML = meta.concat(Object.entries(e.props || {}))
+      .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+  }
 
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = false;
-  draw();
+  syncGraphControls();
+  requestRender();
 
   try {
     const r = await apiGet(`/api/v1/abuse?src=${encodeURIComponent(e.source)}&kind=${encodeURIComponent(e.kind)}&dst=${encodeURIComponent(e.target)}`);
@@ -1042,11 +1475,11 @@ function modalOpenInGraph() {
   setView("graph");
   if (ctx.type === "node") {
     const n = byId.get(ctx.id);
-    if (n) { selectNode(n); setTimeout(() => { centerSelection(); draw(); }, 60); }
+    if (n) { selectNode(n); setTimeout(() => { centerSelection(); }, 60); }
   } else if (ctx.type === "edge") {
     const e = ctx.edge;
     selectEdge(e);
-    setTimeout(() => { centerSelection(); draw(); }, 60);
+    setTimeout(() => { centerSelection(); }, 60);
   }
 }
 
@@ -1709,6 +2142,8 @@ function wireSettings() {
     ["settingLabels", "labels"],
     ["settingEdgeLabels", "edgeLabels"],
     ["settingLegend", "legend"],
+    ["settingArrows", "arrows"],
+    ["settingTooltips", "tooltips"],
     ["settingPhysics", "physics"],
     ["settingReduceMotion", "reduceMotion"],
     ["settingAutoRefresh", "autoRefresh"],
@@ -1716,7 +2151,7 @@ function wireSettings() {
   ];
   pairs.forEach(([id, key]) => {
     const el = document.getElementById(id);
-    if (el) el.addEventListener("change", () => { prefs[key] = el.checked; savePrefs(); });
+    if (el) el.addEventListener("change", () => { prefs[key] = el.checked; savePrefs(); requestRender(); });
   });
   const interval = document.getElementById("settingRefreshInterval");
   if (interval) interval.addEventListener("change", () => { prefs.refreshInterval = parseInt(interval.value || "0", 10) || 0; savePrefs(); });
@@ -1732,6 +2167,33 @@ function wireSettings() {
   if (edgeLabelToggle) edgeLabelToggle.addEventListener("change", () => { prefs.edgeLabels = edgeLabelToggle.checked; savePrefs(); });
   const legendToggle = document.getElementById("showLegend");
   if (legendToggle) legendToggle.addEventListener("change", () => { prefs.legend = legendToggle.checked; savePrefs(); });
+  const arrowToggle = document.getElementById("showArrows");
+  if (arrowToggle) arrowToggle.addEventListener("change", () => { prefs.arrows = arrowToggle.checked; savePrefs(); renderLegend(); requestRender(); });
+}
+
+// Find a node by name / identifier from the graph toolbar. Matches are
+// highlighted and the first match is focused automatically.
+function wireGraphSearch() {
+  const el = document.getElementById("graphSearch");
+  if (!el) return;
+  let t = null;
+  const run = (focus) => {
+    const q = el.value.trim().toLowerCase();
+    matchIds = new Set();
+    if (!q) { applyFilters(); return; }
+    let first = null;
+    for (const n of nodes) {
+      const hay = `${n.name || ""} ${n.sam_account_name || ""} ${n.id} ${n.kind || ""}`.toLowerCase();
+      if (hay.includes(q)) { matchIds.add(n.id); if (!first) first = n; }
+    }
+    applyFilters();
+    if (focus && first) focusNode(first, Math.max(view.k, 1.15));
+  };
+  el.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => run(false), 200); });
+  el.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); run(true); }
+    if (ev.key === "Escape") { el.value = ""; matchIds = new Set(); applyFilters(); }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1796,7 +2258,7 @@ function wireGate() {
         setLock(true);
         status.className = "muted";
         status.textContent = `ok: ${r.nodes} nodes, ${r.edges} edges ingested`;
-        await refresh();
+        await reloadGraph();
       } catch (err) {
         status.className = "warn";
         status.textContent = "error: " + err.message;
@@ -1884,18 +2346,41 @@ function wireGlobalSearch() {
 
 function wireToolbar() {
   const fitViewBtn = document.getElementById("fitView");
-  if (fitViewBtn) fitViewBtn.addEventListener("click", fitView);
+  if (fitViewBtn) fitViewBtn.addEventListener("click", () => fitView());
   const resetViewBtn = document.getElementById("resetView");
   if (resetViewBtn) resetViewBtn.addEventListener("click", resetView);
   const centerSelectionBtn = document.getElementById("centerSelection");
   if (centerSelectionBtn) centerSelectionBtn.addEventListener("click", centerSelection);
+
+  const zoomInBtn = document.getElementById("zoomIn");
+  if (zoomInBtn) zoomInBtn.addEventListener("click", () => zoomBy(1.25));
+  const zoomOutBtn = document.getElementById("zoomOut");
+  if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => zoomBy(1 / 1.25));
+  const restartBtn = document.getElementById("restartLayout");
+  if (restartBtn) restartBtn.addEventListener("click", () => { restartLayout(); toast("Layout restarted", "info"); });
+  const isolateBtn = document.getElementById("isolateToggle");
+  if (isolateBtn) isolateBtn.addEventListener("click", toggleIsolate);
+  const hideEdgesBtn = document.getElementById("hideUnrelatedEdges");
+  if (hideEdgesBtn) hideEdgesBtn.addEventListener("click", () => {
+    hideUnrelatedEdges = !hideUnrelatedEdges;
+    syncGraphControls();
+    requestRender();
+  });
+  const clearSelBtn = document.getElementById("clearSelectionBtn");
+  if (clearSelBtn) clearSelBtn.addEventListener("click", clearSelection);
+
   const reloadEl = document.getElementById("reload");
-  if (reloadEl) reloadEl.addEventListener("click", () => refresh().then(() => toast("Graph reloaded", "success")).catch((e) => toast("Reload failed: " + e.message, "error")));
+  if (reloadEl) reloadEl.addEventListener("click", () => reloadGraph().then(() => toast("Graph reloaded", "success")).catch((e) => toast("Reload failed: " + e.message, "error")));
 
   const nodeKindFilter = document.getElementById("nodeKindFilter");
   if (nodeKindFilter) nodeKindFilter.addEventListener("change", () => { applyFilters(); fitView(); });
   const edgeKindFilter = document.getElementById("edgeKindFilter");
   if (edgeKindFilter) edgeKindFilter.addEventListener("change", () => { applyFilters(); });
+
+  const showArrows = document.getElementById("showArrows");
+  if (showArrows) showArrows.addEventListener("change", () => { prefs.arrows = showArrows.checked; savePrefs(); renderLegend(); requestRender(); });
+
+  wireGraphSearch();
 
   const openInGraph = document.getElementById("openInGraph");
   if (openInGraph) openInGraph.addEventListener("click", () => { if (selectedNode) centerSelection(); });
@@ -1990,6 +2475,13 @@ async function refresh() {
   else if (active === "overview") loadOverview();
 }
 
+// Reload the graph and recompute the layout, then re-render the current view.
+async function reloadGraph() {
+  await refresh();
+  settleLayout();
+  renderView(parseHash());
+}
+
 function init() {
   loadPrefs();
   try { resize(); } catch (_) {}
@@ -2007,11 +2499,8 @@ function init() {
 
   refresh().then(() => {
     settleLayout();
-    try { loop(); } catch (_) {}
     renderView(startView);
-  }).catch(() => {
-    try { loop(); } catch (_) {}
-  });
+  }).catch(() => {});
   scheduleAutoRefresh();
 }
 
