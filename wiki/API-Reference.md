@@ -111,6 +111,56 @@ not found.
 { "edges": ["GenericAll", "WriteDacl", "MemberOf", "AdminTo", "…"] }
 ```
 
+### `GET /api/v1/analytics`
+
+Lists the canned attack-path queries.
+
+```json
+{
+  "queries": [
+    {
+      "id": "kerberoastable",
+      "title": "Kerberoastable users",
+      "category": "Credentials",
+      "description": "Enabled users with a service principal name (SPN)…",
+      "cypher": "MATCH (u:User) WHERE NOT u.name STARTS WITH 'KRBTGT' AND (u.hasspn = true OR u.serviceprincipalname IS NOT NULL) RETURN u"
+    }
+  ]
+}
+```
+
+The `cypher` field is the equivalent BloodHound CE query, so the same question can
+be run against a CE-populated Neo4j graph.
+
+### `GET /api/v1/analytics/{id}`
+
+Runs one canned query against the current graph. `{id}` is any id from the list
+above — for example `kerberoastable`, `asreproastable`, `dcsync`,
+`laps-readable`, `unconstrained-delegation`, `constrained-delegation`, `rbcd`,
+`adminto`, `has-session`, `high-value-targets`, `admincount`, `sensitive-users`,
+`owned`, `password-never-expires`.
+
+```json
+{
+  "query": { "id": "dcsync", "title": "DCSync-capable principals", "category": "Credentials" },
+  "count": 1,
+  "findings": [
+    {
+      "node": { "id": "S-1-5-...-1103", "kind": "User", "name": "REPLADMIN" },
+      "reason": "Holds directory replication rights; can replicate credential hashes from the domain.",
+      "evidence": ["GetChangesAll → UXLAB"],
+      "related": ["S-1-5-21-9"]
+    }
+  ],
+  "notes": []
+}
+```
+
+`notes` is where honesty lives: if the graph contains no node carrying the
+attribute (or no relationship of the kind) that a query depends on, the note says
+so, so a `count` of `0` is never presented as a clean bill of health. Errors:
+`404` for an unknown query id.
+
 ---
 
 ## Write endpoints (bearer token required)

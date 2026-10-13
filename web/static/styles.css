@@ -820,3 +820,36 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
 }
+
+/* ---- Attack Paths (canned analytics) ---- */
+.attack-grid { display: flex; flex-direction: column; gap: var(--sp-4); }
+.attack-category h3 { margin: 0 0 var(--sp-2); }
+.attack-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-2); }
+.attack-card {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--rad-md);
+  padding: var(--sp-3); white-space: normal; cursor: pointer; transition: all var(--t-fast);
+}
+.attack-card:hover { border-color: var(--accent); background: var(--panel3); }
+.attack-card .attack-title { font-weight: 600; color: var(--fg); font-size: var(--fs-sm); }
+.attack-card .attack-desc { color: var(--muted); font-size: var(--fs-xs); line-height: var(--lh-tight); margin: 0; }
+.attack-result { margin-top: var(--sp-4); border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+.attack-result-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
+.attack-result-head h3 { margin: 0; font-size: var(--fs-md); }
+.attack-notes { display: flex; flex-direction: column; gap: 6px; margin: var(--sp-2) 0; }
+.attack-note {
+  background: var(--panel2); border: 1px solid var(--warn); border-left-width: 3px;
+  border-radius: var(--rad-sm); padding: 8px 10px; font-size: var(--fs-xs); color: var(--fg-dim);
+}
+.attack-findings { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-3) 0; }
+.attack-finding { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--rad-md); padding: 10px 12px; cursor: pointer; transition: border-color var(--t-fast); }
+.attack-finding:hover { border-color: var(--line-hover); }
+.attack-finding-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.attack-finding-name { font-weight: 600; color: var(--fg); font-size: var(--fs-sm); }
+.attack-finding .kind-badge { font-size: 9.5px; padding: 1px 6px; border-radius: var(--rad-sm); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+.attack-finding-reason { margin-top: 4px; }
+.attack-evidence { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.attack-evidence code { background: var(--panel3); border: 1px solid var(--line); border-radius: var(--rad-sm); padding: 1px 6px; font-size: var(--fs-xs); color: var(--accent2); }
+.attack-related { margin-top: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--muted-strong); }
+.attack-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
+.attack-actions .muted { margin: 0; }

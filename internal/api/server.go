@@ -19,6 +19,7 @@ import (
 
 	"github.com/krazybeastx1/omenhound/internal/abuse"
 	"github.com/krazybeastx1/omenhound/internal/act"
+	"github.com/krazybeastx1/omenhound/internal/analytics"
 	"github.com/krazybeastx1/omenhound/internal/audit"
 	"github.com/krazybeastx1/omenhound/internal/creds"
 	"github.com/krazybeastx1/omenhound/internal/graph"
@@ -118,6 +119,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/paths/shortest", s.handlePathsShortest)
 	mux.HandleFunc("GET /api/v1/abuse", s.handleAbuse)
 	mux.HandleFunc("GET /api/v1/abuse/supported", s.handleAbuseSupported)
+	mux.HandleFunc("GET /api/v1/analytics", s.handleAnalyticsQueries)
+	mux.HandleFunc("GET /api/v1/analytics/{id}", s.handleAnalyticsRun)
 
 	mux.HandleFunc("POST /api/v1/ingest", s.handleIngest)
 	mux.HandleFunc("DELETE /api/v1/graph", s.handleClearGraph)
@@ -322,6 +325,26 @@ func (s *Server) handleAbuse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rendered)
+}
+
+// handleAnalyticsQueries lists the canned attack-path queries available.
+func (s *Server) handleAnalyticsQueries(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"queries": analytics.Queries()})
+}
+
+// handleAnalyticsRun executes one canned attack-path query against the graph.
+func (s *Server) handleAnalyticsRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	res, err := analytics.Run(r.Context(), s.store, id)
+	if errors.Is(err, analytics.ErrUnknownQuery) {
+		writeErr(w, http.StatusNotFound, "unknown query: "+id)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // ---- write handlers ----

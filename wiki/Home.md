@@ -52,6 +52,7 @@ go install github.com/krazybeastx1/omenhound/cmd/omenhound@latest
 | **Ingestion API + UI** | `omenhound serve` | HTTP service that ingests graphs and serves a force-directed attack-path UI. |
 | **Abuse engine** | *(in the UI/API)* | For every edge, renders a copy-pasteable command from **real node properties**, plus OPSEC and Windows event IDs. |
 | **Gated credential ops** | *(off by default)* | Optional `unicodePwd` password change over LDAPS behind token + per-action approval + audit. |
+| **Attack-path analytics** | `omenhound serve` | Fourteen canned queries (Kerberoastable, AS-REP, DCSync, LAPS, delegation, AdminTo, high-value…) at `/api/v1/analytics` and the **Attack Paths** UI view — each result lists its evidence and flags missing data. |
 
 ## Screenshots
 

@@ -95,6 +95,21 @@ undirected) and node/relationship-type filters, and any path can be pushed back 
 canvas with **⌖ Show on graph**, highlighting its nodes and edges until cleared. Paths are
 graph evidence — a connection is never presented as an exploitable attack path.
 
+## Attack Paths (canned analytics)
+
+The *Attack Paths* view answers the classic BloodHound questions without writing any
+Cypher: Kerberoastable users, AS-REP roastable users, DCSync-capable principals, LAPS
+readers, unconstrained/constrained delegation, RBCD, local administrators, observed
+sessions, high-value targets, AdminSDHolder-protected objects, sensitive users, and
+owned principals. Pick a query to run it against the current graph.
+
+Each finding shows the **evidence** that matched (the concrete property or the
+relationship and its target). When the graph contains none of the attribute or
+relationship a query depends on, the result shows a **note** saying so — an empty
+result is only evidence of absence when that data was actually collected. **⌖ Highlight
+on graph** pushes the matches onto the Graph Explorer. The same queries are available
+over the API at `/api/v1/analytics` (see the API Reference).
+
 ## Keyboard shortcuts
 
 Ignored while typing in a form control:

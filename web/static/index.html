@@ -27,6 +27,7 @@
       <div class="nav-divider"></div>
       <button class="nav-btn" data-view="relationships" aria-label="Relationships">Relationships</button>
       <button class="nav-btn" data-view="paths" aria-label="Path Explorer">Path Explorer</button>
+      <button class="nav-btn" data-view="attacks" aria-label="Attack Paths">Attack Paths</button>
       <div class="nav-divider"></div>
       <button class="nav-btn" data-view="ingestion" aria-label="Ingestion">Ingestion</button>
       <button class="nav-btn" data-view="collection" aria-label="Collection Guidance">Collection Guidance</button>
@@ -439,6 +440,19 @@
             <span id="pathNote" class="muted small"></span>
           </div>
           <div id="pathResults" class="path-list" role="list"></div>
+        </div>
+      </section>
+
+      <!-- Attack Paths -->
+      <section id="view-attacks" class="view" aria-labelledby="attacks-title">
+        <div class="card">
+          <h2 id="attacks-title">Attack Paths</h2>
+          <p class="muted small">Canned, documented analytics computed over the current graph. Each result lists the exact properties or relationships that matched. Nothing here is asserted to be exploitable, and an empty result is only meaningful when the underlying data was collected.</p>
+          <div class="toolbar">
+            <input id="attackSearch" type="search" placeholder="Filter queries…" aria-label="Filter queries" />
+          </div>
+          <div id="attackQueries" class="attack-grid" role="list"></div>
+          <div id="attackResult" class="attack-result" hidden></div>
         </div>
       </section>
 

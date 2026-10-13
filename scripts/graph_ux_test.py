@@ -75,6 +75,14 @@ HOST = "S-1-5-21-9-2001"
 GROUP = "S-1-5-21-9-3001"
 GPO = "S-1-5-21-9-4001"
 DOMAIN = "S-1-5-21-9"
+# Analytics fixture — properties/edges the canned attack-path queries key on.
+KERB = "S-1-5-21-9-5001"
+ASREP = "S-1-5-21-9-5002"
+DELEG = "S-1-5-21-9-5003"
+DCSYNC = "S-1-5-21-9-5004"
+OWNED = "S-1-5-21-9-5005"
+HVTARGET = "S-1-5-21-9-5006"
+LAPSREADER = "S-1-5-21-9-5007"
 
 FIXTURE = {
     "nodes": [
@@ -91,12 +99,28 @@ FIXTURE = {
          "props": {"os": "Windows Server 2022"}},
         {"id": GROUP, "kind": "Group", "name": "UX ADMINS", "domain": "uxlab.test"},
         {"id": GPO, "kind": "GPO", "name": "UX GPO", "domain": "uxlab.test"},
+        {"id": KERB, "kind": "User", "name": "KERBSVC", "domain": "uxlab.test",
+         "props": {"enabled": "true", "hasspn": "true",
+                   "serviceprincipalname": "MSSQLSvc/db.uxlab.test:1433"}},
+        {"id": ASREP, "kind": "User", "name": "ASREPUSER", "domain": "uxlab.test",
+         "props": {"enabled": "true", "dontreqpreauth": "true"}},
+        {"id": DELEG, "kind": "Computer", "name": "DELEGHOST", "domain": "uxlab.test",
+         "props": {"unconstraineddelegation": "true"}},
+        {"id": DCSYNC, "kind": "User", "name": "REPLADMIN", "domain": "uxlab.test",
+         "props": {"enabled": "true"}},
+        {"id": OWNED, "kind": "User", "name": "OWNEDUSER", "domain": "uxlab.test", "props": {"owned": "true"}},
+        {"id": HVTARGET, "kind": "Group", "name": "HIGH VALUE", "domain": "uxlab.test",
+         "props": {"highvalue": "true"}},
+        {"id": LAPSREADER, "kind": "User", "name": "LAPSREADER", "domain": "uxlab.test",
+         "props": {"enabled": "true"}},
     ],
     "edges": [
         {"source": USER, "target": GROUP, "kind": "MemberOf"},
         {"source": GROUP, "target": GPO, "kind": "GenericAll"},
         {"source": USER, "target": HOST, "kind": "HasSession"},
         {"source": USER2, "target": HOST, "kind": "HasSession"},
+        {"source": DCSYNC, "target": DOMAIN, "kind": "GetChangesAll"},
+        {"source": LAPSREADER, "target": HOST, "kind": "ReadLAPSPassword"},
     ],
     "meta": {"collector": "ux-fixture", "domain": "uxlab.test"},
 }
@@ -116,6 +140,17 @@ def http_get(base, path, token=None):
         req.add_header("Authorization", "Bearer " + token)
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.status, json.loads(r.read().decode())
+
+
+def http_get_code(base, path, token=None):
+    """Like http_get but returns the status for error responses too."""
+    try:
+        return http_get(base, path, token)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode() or "{}")
+        except Exception:
+            return e.code, {}
 
 
 def http_post(base, path, body, token=None, raw=None):
@@ -182,6 +217,40 @@ def main():
     kinds = set(present["edges"] and [e["k"] for e in present["edges"]] or [])
     has_fixture = USER in ids and HOST in ids
     has_sessions = "HasSession" in kinds
+    has_analytics = KERB in ids and DCSYNC in ids and LAPSREADER in ids
+
+    # ---- analytics (canned attack-path queries) -------------------
+    st, qlist = http_get(base, "/api/v1/analytics")
+    qids = set(q.get("id") for q in (qlist.get("queries") or []))
+    check("api: /analytics lists the canned queries",
+          st == 200 and {"kerberoastable", "dcsync", "high-value-targets"} <= qids,
+          {"status": st, "count": len(qids)})
+    if has_analytics:
+        st, kerb = http_get(base, "/api/v1/analytics/kerberoastable")
+        found = set(f["node"]["id"] for f in (kerb.get("findings") or []))
+        check("api: kerberoastable finds the SPN user (and nothing else)",
+              st == 200 and kerb.get("count") == 1 and found == {KERB},
+              {"status": st, "count": kerb.get("count"), "found": sorted(found)})
+        st, dc = http_get(base, "/api/v1/analytics/dcsync")
+        rel = set(r for f in (dc.get("findings") or []) for r in (f.get("related") or []))
+        check("api: dcsync lists replication rights over the domain",
+              st == 200 and dc.get("count") == 1 and DOMAIN in rel, dc)
+        st, laps = http_get(base, "/api/v1/analytics/laps-readable")
+        check("api: edge-backed query lists the reader and the target host",
+              st == 200 and laps.get("count") == 1 and
+              (laps.get("findings") or [{}])[0]["node"]["id"] == LAPSREADER and
+              HOST in ((laps.get("findings") or [{}])[0].get("related") or []), laps)
+        st, adm = http_get(base, "/api/v1/analytics/adminto")
+        notes = " ".join(adm.get("notes") or [])
+        check("api: empty analytics result carries an honest absence note",
+              st == 200 and adm.get("count") == 0 and "AdminTo" in notes, adm)
+    else:
+        skip("api: kerberoastable finds the SPN user (and nothing else)", "analytics fixture not present (use --ingest)")
+        skip("api: dcsync lists replication rights over the domain", "analytics fixture not present (use --ingest)")
+        skip("api: edge-backed query lists the reader and the target host", "analytics fixture not present (use --ingest)")
+        skip("api: empty analytics result carries an honest absence note", "analytics fixture not present (use --ingest)")
+    code, _ = http_get_code(base, "/api/v1/analytics/not-a-query")
+    check("api: unknown analytics query is a 404", code == 404, {"status": code})
 
     try:
         # ---- 1/2. baseline load + selection (regression) --------------
@@ -411,6 +480,37 @@ def main():
                   ui_path["view"] == "view-graph" and ui_path["active"] and ui_path["clear"], ui_path)
             js(d, "clearPathHighlight(); location.hash='#/graph';")
             WebDriverWait(d, 10).until(lambda x: "view-graph" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
+
+        # ---- 11c. Attack Paths view (canned analytics) ---------------
+        d.execute_script("arguments[0].click();", d.find_element(By.CSS_SELECTOR, '.nav-btn[data-view="attacks"]'))
+        WebDriverWait(d, 15).until(lambda x: "view-attacks" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
+        WebDriverWait(d, 15).until(lambda x: js(x, "return document.querySelectorAll('#attackQueries .attack-card[data-query]').length>0"))
+        cards = js(d, "return [...document.querySelectorAll('#attackQueries .attack-card[data-query]')].map(e=>e.dataset.query)")
+        check("Attack Paths view lists the canned queries",
+              "kerberoastable" in cards and "dcsync" in cards, {"cards": len(cards)})
+        filt_cards = js(d, """const i=document.getElementById('attackSearch'); i.value='kerberoast';
+            i.dispatchEvent(new Event('input',{bubbles:true}));
+            return [...document.querySelectorAll('#attackQueries .attack-card[data-query]')].map(e=>e.dataset.query);""")
+        check("Attack Paths query filter narrows the list",
+              filt_cards == ["kerberoastable"], {"filtered": filt_cards})
+        js(d, """const i=document.getElementById('attackSearch'); i.value=''; i.dispatchEvent(new Event('input',{bubbles:true}));""")
+        if has_analytics:
+            js(d, """document.querySelector('#attackQueries .attack-card[data-query="kerberoastable"]').click();""")
+            WebDriverWait(d, 15).until(lambda x: js(x, "return document.querySelectorAll('#attackResult .attack-finding').length>0"))
+            res = js(d, """return {count:document.querySelectorAll('#attackResult .attack-finding').length,
+                text:document.getElementById('attackResult').textContent,
+                highlight:document.getElementById('attackHighlight')!==null};""")
+            check("running a canned query shows its findings in the UI",
+                  res["count"] == 1 and "KERBSVC" in res["text"] and res["highlight"], res)
+            js(d, "document.getElementById('attackHighlight').click();")
+            WebDriverWait(d, 10).until(lambda x: "view-graph" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
+            hl = js(d, "return {view:(document.querySelector('.view.active')||{}).id, match:matchIds.has('%s')}" % KERB)
+            check("a finding can be highlighted on the Graph Explorer",
+                  hl["view"] == "view-graph" and hl["match"] is True, hl)
+            js(d, "matchIds=new Set(); applyFilters();")
+        else:
+            skip("running a canned query shows its findings in the UI", "analytics fixture not present (use --ingest)")
+            skip("a finding can be highlighted on the Graph Explorer", "analytics fixture not present (use --ingest)")
 
         # ---- 12. invalid / incomplete data is handled safely -----------
         if args.token:

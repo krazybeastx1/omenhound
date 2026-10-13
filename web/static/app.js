@@ -55,8 +55,8 @@ const EDGE_COLOR_DEFAULT = "#5c6b85";
 
 const VIEWS = [
   "overview", "graph", "domains", "users", "groups", "computers", "ous",
-  "gpos", "containers", "trusts", "relationships", "paths", "ingestion",
-  "collection", "audit", "settings",
+  "gpos", "containers", "trusts", "relationships", "paths", "attacks",
+  "ingestion", "collection", "audit", "settings",
 ];
 
 const DEFAULT_PREFS = {
@@ -1642,6 +1642,8 @@ function renderView(name) {
   } else if (name === "paths") {
     populatePathOptions();
     populatePathSuggestFromGraph();
+  } else if (name === "attacks") {
+    loadAttacks();
   } else if (name === "audit") {
     loadAudit();
   } else if (name === "settings") {
@@ -2553,6 +2555,155 @@ function wirePathExplorer() {
 }
 
 // ---------------------------------------------------------------------------
+// Attack Paths (canned analytics)
+// ---------------------------------------------------------------------------
+
+let attackQueryList = null;
+
+async function loadAttacks() {
+  const grid = document.getElementById("attackQueries");
+  const result = document.getElementById("attackResult");
+  if (!grid) return;
+  if (result) { result.hidden = true; result.innerHTML = ""; }
+  if (attackQueryList) { renderAttackQueries(attackQueryList); return; }
+  grid.innerHTML = stateHTML("loading", "Loading queries…");
+  try {
+    const j = await apiGet("/api/v1/analytics");
+    attackQueryList = j.queries || [];
+    renderAttackQueries(attackQueryList);
+  } catch (e) {
+    grid.innerHTML = stateHTML("error", "Failed to load queries", e.message);
+  }
+}
+
+function renderAttackQueries(list) {
+  const grid = document.getElementById("attackQueries");
+  if (!grid) return;
+  if (!list.length) {
+    grid.innerHTML = stateHTML("empty", "No queries available");
+    return;
+  }
+  const q = (val("attackSearch") || "").toLowerCase();
+  const filtered = list.filter((item) => !q ||
+    (item.title || "").toLowerCase().includes(q) ||
+    (item.category || "").toLowerCase().includes(q) ||
+    (item.description || "").toLowerCase().includes(q));
+  if (!filtered.length) {
+    grid.innerHTML = stateHTML("empty", "No queries match the filter");
+    return;
+  }
+  const cats = [];
+  const byCat = {};
+  for (const item of filtered) {
+    const c = item.category || "Other";
+    if (!byCat[c]) { byCat[c] = []; cats.push(c); }
+    byCat[c].push(item);
+  }
+  grid.innerHTML = cats.map((c) => `
+    <div class="attack-category">
+      <h3>${esc(c)}</h3>
+      <div class="attack-cards">
+        ${byCat[c].map((item) => `
+          <button type="button" class="attack-card" data-query="${esc(item.id)}" title="${esc(item.description || "")}">
+            <span class="attack-title">${esc(item.title)}</span>
+            <span class="attack-desc muted small">${esc(item.description || "")}</span>
+          </button>`).join("")}
+      </div>
+    </div>`).join("");
+  grid.querySelectorAll(".attack-card[data-query]").forEach((el) => {
+    el.addEventListener("click", () => runAttack(el.dataset.query));
+  });
+}
+
+async function runAttack(id) {
+  const box = document.getElementById("attackResult");
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = stateHTML("loading", "Running query…");
+  try {
+    const res = await apiGet("/api/v1/analytics/" + encodeURIComponent(id));
+    renderAttackResult(res);
+  } catch (e) {
+    box.innerHTML = stateHTML("error", "Query failed", e.message);
+  }
+}
+
+function renderAttackResult(res) {
+  const box = document.getElementById("attackResult");
+  if (!box) return;
+  const qd = res.query || {};
+  const findings = res.findings || [];
+  const notes = res.notes || [];
+  const head = `<div class="attack-result-head">
+      <h3>${esc(qd.title || qd.id || "Query")}</h3>
+      <span class="muted small">${res.count} match${res.count === 1 ? "" : "es"}</span>
+    </div>
+    <p class="muted small">${esc(qd.description || "")}</p>`;
+  const notesHtml = notes.length
+    ? `<div class="attack-notes">${notes.map((n) => `<div class="attack-note">⚠ ${esc(n)}</div>`).join("")}</div>`
+    : "";
+  let bodyHtml;
+  if (!findings.length) {
+    bodyHtml = stateHTML("empty", "No matches", "No entity in the current graph matched this query.");
+  } else {
+    const rows = findings.map((f) => {
+      const n = f.node || {};
+      const rel = (f.related || []).map((rid) => {
+        const rn = byId.get(rid);
+        return `<button type="button" class="attack-rel chip-btn" data-id="${esc(rid)}">${esc(rn ? nodeLabel(rn) : rid)}</button>`;
+      }).join(" ");
+      const ev = (f.evidence || []).map((e) => `<code>${esc(e)}</code>`).join(" ");
+      return `<div class="attack-finding" data-id="${esc(n.id)}">
+        <div class="attack-finding-head">
+          <span class="kind-badge" style="background:${COLORS[n.kind] || "#888"};color:#0b0e14">${esc(n.kind || "")}</span>
+          <span class="attack-finding-name">${esc(nodeLabel(n))}</span>
+          <span class="muted small">${esc(n.domain || "")}</span>
+        </div>
+        <div class="attack-finding-reason muted small">${esc(f.reason || "")}</div>
+        ${ev ? `<div class="attack-evidence">${ev}</div>` : ""}
+        ${rel ? `<div class="attack-related">Reaches: ${rel}</div>` : ""}
+      </div>`;
+    }).join("");
+    bodyHtml = `<div class="attack-findings" id="attackFindings">${rows}</div>
+      <div class="attack-actions">
+        <button id="attackHighlight" class="primary">⌖ Highlight on graph</button>
+        <span class="muted small">Highlighting selects ${findings.length} matched node(s) on the Graph Explorer.</span>
+      </div>`;
+  }
+  box.innerHTML = head + notesHtml + bodyHtml;
+  // A finding opens its object-detail modal, unless the click hit a related link.
+  box.querySelectorAll(".attack-finding[data-id]").forEach((el) => {
+    el.addEventListener("click", (ev) => {
+      if (ev.target.closest && ev.target.closest(".attack-rel")) return;
+      openObject(el.dataset.id);
+    });
+  });
+  box.querySelectorAll(".attack-rel[data-id]").forEach((el) => {
+    el.addEventListener("click", (ev) => { ev.stopPropagation(); openObject(el.dataset.id); });
+  });
+  const hl = document.getElementById("attackHighlight");
+  if (hl) hl.addEventListener("click", () => highlightMatches(findings.map((f) => f.node.id)));
+}
+
+// Highlight a set of matched node ids on the Graph Explorer (reuses the graph
+// search highlight set so no second highlighting mechanism is introduced).
+function highlightMatches(nodeIds) {
+  const present = (nodeIds || []).filter((id) => byId.has(id));
+  if (!present.length) { toast("No matched nodes are in the current graph", "warn"); return; }
+  matchIds = new Set(present);
+  pathHighlight = null;
+  setView("graph");
+  applyFilters();
+  setTimeout(() => fitToNodes(new Set(present)), 40);
+  toast(`Highlighted ${present.length} matched node(s)`, "success");
+}
+
+function wireAttacks() {
+  const search = document.getElementById("attackSearch");
+  if (search) search.addEventListener("input", () => { if (attackQueryList) renderAttackQueries(attackQueryList); });
+}
+
+// ---------------------------------------------------------------------------
 // Settings / About
 // ---------------------------------------------------------------------------
 
@@ -3028,6 +3179,7 @@ function init() {
   wireGate();
   wireIngestion();
   wirePathExplorer();
+  wireAttacks();
   wireGlobalSearch();
 
   const startView = parseHash();

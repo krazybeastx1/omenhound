@@ -566,6 +566,8 @@ The pipeline is the only HTTP-side writer to the `Store`; `export` uses
 | GET    | `/api/v1/edges?source=&kind=` | relationships of a node                |
 | GET    | `/api/v1/paths?from=&to=`     | shortest attack path (edges)           |
 | GET    | `/api/v1/abuse?edge=&from=`   | rendered abuse command(s) for an edge  |
+| GET    | `/api/v1/analytics`           | list the canned attack-path queries    |
+| GET    | `/api/v1/analytics/{id}`      | run one canned attack-path query       |
 | POST   | `/api/v1/creds/change`        | live credential change (gated, §6.6)   |
 | GET    | `/api/v1/audit`               | recent audit records (auth required)   |
 | GET    | `/` and `/assets/*`           | web UI (static bundle)                 |
@@ -664,6 +666,7 @@ omenhound/
 │   ├── ingest/               # pipeline: strict decode, validate + merge
 │   ├── api/                  # HTTP handlers, routing, auth/rate-limit middleware
 │   ├── abuse/                # edge -> template -> rendered command + OPSEC
+│   ├── analytics/            # canned attack-path queries over the graph
 │   ├── creds/                # memory-only credential vault (redacting types)
 │   ├── audit/                # append-only JSONL audit log
 │   ├── act/                  # the only AD write path (unicodePwd over LDAPS)

@@ -469,6 +469,37 @@ fewer credential artifacts on disk and in shell history.
 
 ---
 
+## Canned analytics queries
+
+`omenhound serve` exposes the same questions BloodHound CE's Attack Paths asks, as
+canned queries over the current graph. `GET /api/v1/analytics` lists them;
+`GET /api/v1/analytics/{id}` runs one, and the UI shows them under **Attack Paths**.
+
+| Query id | Needs | Answers |
+|---|---|---|
+| `kerberoastable` | `hasspn` / `serviceprincipalname` | Users with an SPN (TGS ready to crack offline) |
+| `asreproastable` | `dontreqpreauth` | Users without Kerberos pre-authentication |
+| `dcsync` | `GetChanges`/`GetChangesAll`/`GetChangesInFilteredSet`/`DCSync` → `Domain` | Principals that can replicate credential hashes |
+| `laps-readable` | `ReadLAPSPassword` → `Computer` | Principals that can read a host's LAPS password |
+| `password-never-expires` | `pwdneverexpires` | Users whose password never expires |
+| `unconstrained-delegation` | `unconstraineddelegation` | Hosts/accounts that cache presented TGTs |
+| `constrained-delegation` | `AllowedToDelegate` | Principals delegated to specific services |
+| `rbcd` | `AllowedToAct` | Principals that can configure RBCD |
+| `adminto` | `AdminTo` → `Computer` | Local administrators of a host |
+| `has-session` | `HasSession` → `Computer` | Observed logon sessions |
+| `high-value-targets` | `highvalue` | The usual goals of an attack path |
+| `admincount` | `admincount` | AdminSDHolder-protected users/groups |
+| `sensitive-users` | `sensitive` | Accounts that cannot be delegated |
+| `owned` | `owned` | Sources already marked compromised |
+
+Each result carries the **evidence** that matched (`evidence`) and, for
+relationship-backed queries, the **`related`** target ids. When the attribute or
+relationship a query needs is absent from the whole graph, the result includes a
+`notes` entry saying so — an empty answer is only evidence of absence when the data
+was actually collected.
+
+---
+
 ## Final word on authorization
 
 All techniques and commands here are for **authorized red‑team engagements, penetration

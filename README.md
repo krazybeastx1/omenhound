@@ -26,7 +26,7 @@
 <h1 align="center">OmenHound</h1>
 
 <p align="center">
-  <b>A BloodHound-style Active Directory attack-path tool, rewritten in Go.</b><br/>
+  <b>An Active Directory attack-path tool, customized with BloodHound CE and written in Go.</b><br/>
   Single static binary collector · Neo4j graph backend · dynamic abuse-command engine · web UI.
 </p>
 
@@ -86,7 +86,7 @@ make build                     # -> bin/omenhound
 
 ## What it is
 
-OmenHound is a from-scratch Go implementation of the BloodHound model:
+OmenHound is a Go implementation of the BloodHound CE model:
 
 | Piece | What it does |
 |---|---|
@@ -95,6 +95,7 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
 | **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. Ingest can **merge** (default) or **replace** the current graph, and the UI can **delete** all data so you work with one dataset at a time. |
 | **Dynamic abuse engine** | For every edge, renders a copy-pasteable abuse command by interpolating **real node properties**, with a per-technique **OPSEC/detection note** and Windows event IDs. |
+| **Attack-path analytics** | Fourteen canned, documented queries (Kerberoastable, AS-REP roastable, DCSync, LAPS, delegation, AdminTo, high-value, adminCount, owned…) answered over the current graph at `/api/v1/analytics`, with an **Attack Paths** view in the UI. Each result lists the exact property/relationship that matched, and a zero result says so when the underlying attribute was never collected. |
 | **Gated credential ops** | Optional, off-by-default ability to change an AD password over LDAPS (`unicodePwd`), behind token + explicit-approval + audit gates. |
 
 Unlike a static cheat-sheet, the abuse commands are generated at render time.
@@ -402,9 +403,9 @@ go test ./...           # unit tests
 gofmt -s -w .           # format
 ```
 
-All tests are dependency-free: the graph, abuse, creds, audit, ingest, and API
-layers are exercised against the in-memory store, so nothing requires a domain
-or a database.
+All tests are dependency-free: the graph, abuse, analytics, creds, audit, ingest,
+and API layers are exercised against the in-memory store, so nothing requires a
+domain or a database.
 
 ## Roadmap
 
@@ -426,8 +427,13 @@ or a database.
       password, NT hash (`--hashes`), AES key (`--aes-key`) or ccache (`--use-kcache`)
       *(flag handling, SPN construction and credential selection are unit-tested; the
       live handshake is code-only — no domain controller was available)*
+- [x] Canned attack-path analytics (Kerberoastable, AS-REP roastable, DCSync, LAPS,
+      delegation, AdminTo, high-value, adminCount, owned…) exposed at
+      `GET /api/v1/analytics` and shown in the **Attack Paths** UI view
+      *(unit-tested; queries key off BloodHound CE property/edge names and flag when
+      the data they need was never collected)*
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
-- [ ] Customized BloodHound CE frontend (stock CE UI as fallback)
+- [ ] Customized BloodHound CE frontend (BloodHound CE is written in Go; stock CE UI as fallback)
 
 ---
 

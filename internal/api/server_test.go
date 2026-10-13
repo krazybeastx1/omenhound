@@ -249,6 +249,63 @@ func TestIngestModeMergeIsDefault(t *testing.T) {
 	}
 }
 
+func TestAnalyticsQueriesListed(t *testing.T) {
+	h := newTestServer(t).Handler()
+	w := do(t, h, "GET", "/api/v1/analytics", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("analytics list status = %d %s", w.Code, w.Body.String())
+	}
+	for _, want := range []string{"kerberoastable", "dcsync", "high-value-targets"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("analytics list missing %q: %s", want, w.Body.String())
+		}
+	}
+}
+
+func TestAnalyticsRunReportsFindings(t *testing.T) {
+	st := graph.NewMemory()
+	ctx := context.Background()
+	if err := st.UpsertNodes(ctx, []model.Node{
+		{ID: "U-KERB", Kind: model.KindUser, Name: "svc", Props: map[string]string{"hasspn": "true"}},
+		{ID: "U-PLAIN", Kind: model.KindUser, Name: "plain"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Config{StoreIface: st, Version: "test"}).Handler()
+	w := do(t, h, "GET", "/api/v1/analytics/kerberoastable", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("run status = %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"count":1`) || !strings.Contains(body, "U-KERB") {
+		t.Fatalf("kerberoastable result = %s", body)
+	}
+	if strings.Contains(body, "U-PLAIN") {
+		t.Fatalf("non-SPN user matched: %s", body)
+	}
+}
+
+func TestAnalyticsAbsenceNote(t *testing.T) {
+	// seeded() has no SPN data at all: an empty result must say so.
+	h := newTestServer(t).Handler()
+	w := do(t, h, "GET", "/api/v1/analytics/kerberoastable", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"count":0`) || !strings.Contains(body, "may reflect missing collection") {
+		t.Fatalf("expected honest absence note, got %s", body)
+	}
+}
+
+func TestAnalyticsUnknownQuery(t *testing.T) {
+	h := newTestServer(t).Handler()
+	w := do(t, h, "GET", "/api/v1/analytics/not-a-query", "", nil)
+	if w.Code != 404 {
+		t.Fatalf("unknown query status = %d, want 404", w.Code)
+	}
+}
+
 func TestIngestRejectsUnknownMode(t *testing.T) {
 	srv := newTestServer(t)
 	h := srv.Handler()

@@ -59,6 +59,10 @@ every gap is reported rather than faked. This page is the current boundary.
   real node properties, with alternates, OPSEC, event IDs and explicit warnings.
 - **Web UI** — dependency-free canvas force graph, node inspector, per-edge abuse panel,
   search, and the token-gated write API.
+- **Attack-path analytics** — fourteen canned, documented queries (Kerberoastable,
+  AS-REP roastable, DCSync, LAPS, delegation, AdminTo, high-value, adminCount, owned…)
+  at `GET /api/v1/analytics` and an **Attack Paths** UI view. Each result lists the
+  property/relationship that matched and flags when the data it needs was never collected.
 - **Hardening** — plaintext-LDAP refusal, memory-only TTL credentials with zeroing, TLS
   1.2+ for AD writes, bearer-token auth (constant-time), per-action approval on password
   changes, security headers, rate limiting, pagination, strict ingest, and a redacting
@@ -77,7 +81,6 @@ every gap is reported rather than faked. This page is the current boundary.
 - **Customised BloodHound CE frontend** options, with **stock-CE fallback** when the
   custom assets are absent.
 - Additional import dialects (SharpHound legacy, other exporters).
-- Query packs / canned attack-path reports surfaced in the UI.
 
 ## Non-goals
 
