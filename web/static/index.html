@@ -112,10 +112,10 @@
               <label class="icon-btn" title="Directional arrows" aria-label="Toggle directional arrows"><input type="checkbox" id="showArrows" checked> Arrows</label>
               <label class="icon-btn" title="Show legend" aria-label="Toggle legend"><input type="checkbox" id="showLegend" checked> Legend</label>
             </div>
-            <div class="toolbar-group" role="group" aria-label="Analysis">
-              <button id="findPathsRun" class="icon-btn" title="Find paths between the starting node and the target" aria-label="Find paths between start and target" disabled>⇉ Find Paths</button>
-              <button id="findPathsFromGraph" class="icon-btn" title="Open Path Explorer from the starting node" aria-label="Find paths from the starting node">⇄ Paths</button>
-              <button id="togglePathDrawer" class="icon-btn" title="Show / hide the Path Explorer panel" aria-label="Toggle Path Explorer" aria-pressed="false" hidden>☰ Routes</button>
+            <div class="toolbar-group analysis-group" role="group" aria-label="Analysis">
+              <button id="findPathsRun" class="icon-btn toolbar-btn" title="Find paths between the starting node and the target" aria-label="Find paths between start and target" disabled>⇉ Find Paths</button>
+              <button id="findPathsFromGraph" class="icon-btn toolbar-btn" title="Open Path Explorer from the starting node" aria-label="Find paths from the starting node">⇄ Paths</button>
+              <button id="togglePathDrawer" class="icon-btn toolbar-btn" title="Show / hide the Path Explorer panel" aria-label="Toggle Path Explorer" aria-pressed="false" hidden>☰ Routes</button>
             </div>
             <div class="toolbar-group toolbar-summary">
               <span id="selectionSummary" class="muted small" aria-live="polite">Nothing selected</span>
@@ -157,10 +157,18 @@
               </div>
             </div>
             <div class="panel-empty" id="panel-empty">
-              <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.3"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.3"/></svg>
-              <h2>Select a node or edge</h2>
-              <p>Click a node to inspect it, or click an edge for abuse details.</p>
-              <p class="muted small" id="startHint"></p>
+              <div class="panel-empty-hint">
+                <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.3"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.3"/></svg>
+                <h2>Select a node or edge</h2>
+                <p>Click a node to inspect it, or click an edge for abuse details.</p>
+                <p class="muted small" id="startHint"></p>
+              </div>
+              <section class="abuse-library" aria-labelledby="library-title">
+                <h3 id="library-title">Technique Library</h3>
+                <p class="muted small">Every edge OmenHound can explain, plus common AD techniques that no single edge represents. Commands are templates — fill the <code>{PLACEHOLDER}</code> values and test in an authorized lab. OmenHound never executes them.</p>
+                <div class="toolbar"><input id="librarySearch" type="search" placeholder="Filter techniques…" aria-label="Filter techniques" /></div>
+                <div id="libraryBody" class="library-body"></div>
+              </section>
             </div>
             <section class="panel-body" id="panel-node" hidden>
               <h2 id="node-title"></h2>
@@ -218,6 +226,14 @@
               <dl id="edge-props"></dl>
               <section class="abuse">
                 <h3>Dynamic Abuse Commands</h3>
+                <div id="edge-read-wrap">
+                  <h4 class="cmd-step">Read <span class="muted">— verify the condition</span></h4>
+                  <div class="command-block">
+                    <pre id="edge-read">loading…</pre>
+                    <button class="copy-btn" id="copyRead" title="Copy read command" aria-label="Copy read command">📋</button>
+                  </div>
+                </div>
+                <h4 class="cmd-step">Add <span class="muted">— perform the change</span></h4>
                 <div class="command-block">
                   <pre id="edge-command">loading…</pre>
                   <button class="copy-btn" id="copyCommand" title="Copy command" aria-label="Copy command">📋</button>

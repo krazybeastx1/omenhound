@@ -82,6 +82,10 @@ cd omenhound
 make build                     # -> bin/omenhound
 ```
 
+In a source checkout, `make install` installs the Go binary **and** copies the
+NetExec module into `~/.nxc/modules/` (see `make install-nxc`; `make uninstall-nxc`
+removes just the module).
+
 ---
 
 ## What it is
@@ -289,6 +293,88 @@ stable identifiers (SID, or objectGUID when no SID exists).
 
 ---
 
+## The technique library (Read + Add)
+
+Selecting an edge renders the abuse command for *your* graph. The same material is
+also available as an edge-agnostic **technique library** — grouped, browsable, and
+always split into a **Read** (verify) and an **Add** (act) step:
+
+- **Read** is the verification/enumeration step: confirm the condition or current
+  state before acting (e.g. `impacket-dacledit -action read …`).
+- **Add** is the act step (the JSON field is still `command`).
+
+The library lives in Go. `internal/abuse/templates.go` is the **single source of
+truth** for the 33 **edge-backed** techniques; `internal/abuse/playbook.go` adds
+the operator-facing grouping plus 21 **standalone** techniques (coercion, AD CS,
+roasting, CVEs, recon) that no single edge represents — **10 categories /
+54 techniques**. Because the edge-backed entries pull straight from `Templates`,
+the library and the per-edge renderer can never drift apart.
+
+Edge templates only use placeholders the renderer can fill from graph nodes
+(`{DOMAIN}` `{DC}` `{SOURCE_SAM}` … `{TARGET_SID}`); manually-filled tokens
+(`{LISTENER}` `{CA}` `{TEMPLATE}` `{KRBTGT_HASH}` …) appear only in standalone
+techniques. Per-edge, any unresolvable property becomes `<unknown>` plus a
+`warnings[]` entry — a command is never silently emitted broken.
+
+Two render modes over the same templates:
+
+| Mode | Endpoint | Placeholders |
+|---|---|---|
+| Library (Inspector empty panel; nxc `MODE=playbook`) | `GET /api/v1/abuse/playbook` | left literal |
+| Per-edge (Inspector edge panel/modal; nxc `MODE=target`) | `GET /api/v1/abuse?src=&kind=&dst=` | interpolated from your graph |
+
+Full walkthrough: **[Technique Library](wiki/Technique-Library.md)**.
+
+---
+
+## NetExec module (`nxc -M omenhound`)
+
+The same guidance from the shell. The module is **print-only** — it never executes
+an abuse command; it prints the **Read** (verify) and **Add** (perform) steps so
+the operator stays in control. It needs a running OmenHound server to read from.
+
+### Install
+
+From a source checkout, `make install` installs the Go binary **and** copies the
+module into `~/.nxc/modules/` (see `make install-nxc`; `make uninstall-nxc` removes
+it). Offline tests: `make test-nxc`.
+
+### Modes
+
+`-o MODE=target` (default), `-o MODE=playbook`, `-o MODE=collect`. Options are
+passed as `-o OPTION=VALUE` (nxc syntax — the value must follow `=`).
+
+| Mode | What it prints | Needs |
+|---|---|---|
+| `target` (default) | resolves the host you logged in to (and the authenticated account) and prints Read/Add for every edge leaving them | a login that resolves to a graph node; `NODE` overrides the lookup |
+| `playbook` | the grouped technique library (placeholders kept literal); `CATEGORY=acl,coercion` filters | a login (any) + `SERVER` |
+| `collect` | pushes a graph into OmenHound (`GRAPH` JSON, or `BHCE` via the `omenhound import` binary) | `TOKEN` (write token; read-only APIs need none) |
+
+### Examples
+
+```bash
+# per-target guidance — the host/account you authenticated to
+nxc smb 10.10.10.10 -u <user> -p '<pass>' -M omenhound -o SERVER=http://127.0.0.1:8080
+
+# technique library as a cheatsheet (placeholders kept literal)
+nxc smb 10.10.10.10 -u <user> -p '<pass>' -M omenhound \
+    -o MODE=playbook -o SERVER=http://127.0.0.1:8080
+
+# just the ACL + coercion categories
+nxc smb 10.10.10.10 -u <user> -p '<pass>' -M omenhound \
+    -o MODE=playbook -o CATEGORY=acl,coercion -o SERVER=http://127.0.0.1:8080
+```
+
+`-o SERVER=` only selects where the module **reads from** — `MODE=target` and
+`MODE=playbook` are pure GETs and change nothing server-side. Only `MODE=collect`
+writes (`POST /api/v1/ingest`) and needs a write token; a server started without
+`--api-token` refuses writes (403). A BloodHound CE export can also be pushed via
+`-o BHCE=…` (converted by the `omenhound import` binary).
+
+Full option table and details: **[contrib/nxc/README.md](contrib/nxc/README.md)**.
+
+---
+
 ## CLI
 
 ```
@@ -415,6 +501,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - [Getting Started](wiki/Getting-Started.md) — install, sample mode, real collection, import.
 - [How It Works](wiki/How-It-Works.md) — packages, data model, edge directions.
 - [Web UI Guide](wiki/Web-UI-Guide.md) — graph, abuse panel, auth gate (with screenshots).
+- [Technique Library](wiki/Technique-Library.md) — the Read/Add playbook: categories, placeholders, render modes.
 - [Operations & Hardening](wiki/Operations-and-Hardening.md) — secure defaults, gating, audit, OPSEC.
 - [API Reference](wiki/API-Reference.md) — every HTTP endpoint and payload.
 - [Neo4j Schema & Attack Paths](wiki/Neo4j-Schema-and-Attack-Paths.md) — labels, relationship types, Cypher.
@@ -428,6 +515,7 @@ In-repo references:
 
 - [Architecture](docs/ARCHITECTURE.md) — components, data model, collector/graph contracts, phases.
 - [Attack paths](docs/ATTACK-PATHS.md) — every edge type: meaning, abuse command, OPSEC + event IDs.
+- [NetExec module](contrib/nxc/README.md) — run the playbook from `nxc -M omenhound`.
 - [Threat model](docs/THREAT-MODEL.md) — assets, trust boundaries, STRIDE, mitigations, residual risk.
 
 ---

@@ -150,7 +150,8 @@ The panel shows:
 | Section | Contents |
 |---|---|
 | **title / summary** | the edge kind and `source → target` |
-| **Command** | a copy-pasteable primary command with real SAM/DN/domain/DC |
+| **Read** | the verify/enumerate step — confirm the condition before acting |
+| **Add** | the act step (the `command` field): a copy-pasteable primary command with real SAM/DN/domain/DC |
 | **Alternates** | alternative tooling (impacket, certipy, SharpGPOAbuse, …) |
 | **OPSEC** | what the action looks like on the wire / in logs |
 | **Event IDs** | Windows event IDs to correlate |
@@ -161,7 +162,13 @@ The same rendering is available over HTTP:
 ```bash
 curl -s "http://127.0.0.1:8080/api/v1/abuse?src=<SID>&kind=GenericAll&dst=<SID>" | jq
 curl -s "http://127.0.0.1:8080/api/v1/abuse/supported" | jq
+curl -s "http://127.0.0.1:8080/api/v1/abuse/playbook" | jq
 ```
+
+When **nothing is selected** the Inspector shows the **Technique Library**: the same
+material grouped into 10 categories / 54 techniques, with `{PLACEHOLDER}` tokens kept
+literal so you can fill them by hand (the abuse panel, by contrast, interpolates the
+real source and target). See [Technique Library](Technique-Library).
 
 ## Search
 

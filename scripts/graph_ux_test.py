@@ -301,6 +301,31 @@ def main():
     code, _ = http_get_code(base, "/api/v1/analytics/not-a-query")
     check("api: unknown analytics query is a 404", code == 404, {"status": code})
 
+    # ---- abuse technique library ----------------------------------
+    st, playbook = http_get(base, "/api/v1/abuse/playbook")
+    cats = playbook.get("categories") or []
+    techs = [t for c in cats for t in (c.get("techniques") or [])]
+    edge_techs = [t for t in techs if t.get("edge")]
+    check("api: /abuse/playbook returns a grouped technique library",
+          st == 200 and len(cats) >= 8 and len(techs) >= 40,
+          {"status": st, "categories": len(cats), "techniques": len(techs)})
+    sst, supported = http_get(base, "/api/v1/abuse/supported")
+    sup = set(supported.get("edges") or [])
+    played = set(t.get("edge") for t in edge_techs)
+    check("api: the playbook covers every edge /abuse/supported advertises",
+          sst == 200 and len(sup) >= 20 and sup <= played,
+          {"supported": len(sup), "in_playbook": len(played)})
+    check("api: playbook edge commands stay templated (no fabricated output)",
+          edge_techs and all("{" in (t.get("command") or "") for t in edge_techs),
+          {"edge_techniques": len(edge_techs)})
+    check("api: every technique carries a distinct read (verify) step",
+          bool(techs) and all((t.get("read") or "").strip() for t in techs) and
+          all((t.get("read") or "") != (t.get("command") or "") for t in techs),
+          {"techniques": len(techs)})
+    check("api: playbook edge read steps stay templated (no fabricated output)",
+          edge_techs and all("{" in (t.get("read") or "") for t in edge_techs),
+          {"edge_techniques": len(edge_techs)})
+
     try:
         # ---- 1/2. baseline load + selection (regression) --------------
         check("graph loads without regressions", len(present["nodes"]) > 0 and len(present["edges"]) > 0,
@@ -331,6 +356,21 @@ def main():
               edge_sel["kind"] is not None and edge_sel["srcName"] in edge_sel["summary"] and edge_sel["tgtName"] in edge_sel["summary"],
               edge_sel)
 
+        # ---- the selected edge shows read (verify) + add commands -----
+        try:
+            ab = WebDriverWait(d, 10).until(lambda x: js(x, """const r=document.getElementById('edge-read');
+                const c=document.getElementById('edge-command');
+                if(!r||!c||c.textContent==='loading…') return false;
+                return {read:r.textContent, command:c.textContent, wrap:!document.getElementById('edge-read-wrap').hidden};"""))
+            if "No abuse template" in ab["command"]:
+                skip("edge panel shows a distinct read (verify) step", "selected edge has no abuse template")
+            else:
+                check("edge panel shows a distinct read (verify) step",
+                      ab["wrap"] and ab["read"] and ab["read"] != ab["command"] and "{" not in ab["read"],
+                      {"read": ab["read"][:70]})
+        except Exception as e:  # noqa: BLE001
+            check("edge panel shows a distinct read (verify) step", False, str(e))
+
         # ---- panels: collapse / hide / reopen ------------------------
         pan = js(d, """const p=document.getElementById('panel');
             document.getElementById('panelCollapse').click(); const c1=p.classList.contains('collapsed');
@@ -351,6 +391,30 @@ def main():
             return {cleared:cleared, focused:focused};""")
         check("keyboard: Escape clears the selection and / focuses search",
               kb["cleared"] and kb["focused"], kb)
+
+        # ---- technique library in the Inspector empty state ----------
+        WebDriverWait(d, 10).until(lambda x: js(x, "return document.querySelectorAll('#libraryBody .lib-category').length>0"))
+        lib = js(d, """return {
+            cats: document.querySelectorAll('#libraryBody .lib-category').length,
+            techs: document.querySelectorAll('#libraryBody .lib-tech').length,
+            copy: document.querySelectorAll('#libraryBody .lib-copy').length,
+            cmd: document.querySelectorAll('#libraryBody .lib-cmd').length,
+            read: document.querySelectorAll('#libraryBody .lib-read').length,
+            standalone: document.querySelectorAll('#libraryBody .lib-tech-edge.standalone').length,
+            visible: !document.getElementById('panel-empty').hidden
+        };""")
+        check("technique library renders in the empty Inspector",
+              lib["visible"] and lib["cats"] >= 8 and lib["techs"] >= 40 and
+              lib["copy"] == lib["techs"] and lib["cmd"] == lib["techs"] and
+              lib["read"] == lib["techs"] and lib["standalone"] >= 1,
+              lib)
+        lf = js(d, """const inp=document.getElementById('librarySearch');
+            inp.value='petitpotam'; inp.dispatchEvent(new Event('input',{bubbles:true}));
+            const n=document.querySelectorAll('#libraryBody .lib-tech').length;
+            inp.value=''; inp.dispatchEvent(new Event('input',{bubbles:true}));
+            return {filtered:n, restored:document.querySelectorAll('#libraryBody .lib-tech').length};""")
+        check("technique library filters and restores",
+              0 < lf["filtered"] < lib["techs"] and lf["restored"] == lib["techs"], lf)
 
         # ---- start / target are independent of the selection ----------
         stt = js(d, """const a=nodes[0].id, b=nodes[1].id;
@@ -483,6 +547,27 @@ def main():
             check("missing credential metadata does not break the Inspector",
                   "No credential evidence" in miss and js(d, "return !document.getElementById('panel-node').hidden") is True, miss)
 
+        # ---- 10b. toolbar layout (hidden controls + no overlap) -------
+        layout = js(d, """
+            const cs=(id)=>getComputedStyle(document.getElementById(id));
+            const hiddenOk=(id)=>{const e=document.getElementById(id); return !e.hasAttribute('hidden') || cs(id).display==='none';};
+            const box=(id)=>document.getElementById(id).getBoundingClientRect();
+            const a=box('findPathsRun'), b=box('findPathsFromGraph');
+            const overlapAB=Math.min(a.right,b.right)-Math.max(a.left,b.left);
+            return {
+              clearOk: hiddenOk('clearPathHighlight'),
+              routesOk: hiddenOk('togglePathDrawer'),
+              startOk: hiddenOk('startNodeChip'),
+              targetOk: hiddenOk('targetNodeChip'),
+              findW: Math.round(a.width), fromW: Math.round(b.width),
+              overlap: overlapAB,
+              labelFits: document.getElementById('findPathsRun').scrollWidth <= Math.ceil(a.width)+1
+            };""")
+        check("toolbar controls carrying the hidden attribute are not rendered",
+              layout["clearOk"] and layout["routesOk"] and layout["startOk"] and layout["targetOk"], layout)
+        check("Find Paths and Paths controls fit their labels and do not overlap",
+              layout["overlap"] <= 0 and layout["labelFits"] and layout["findW"] > 40 and layout["fromW"] > 40, layout)
+
         # ---- 11. path analysis direction + filters --------------------
         if has_fixture:
             st, out = http_post(base, "/api/v1/paths/shortest",
@@ -511,6 +596,39 @@ def main():
                 check("a found path highlights on the graph and can be cleared",
                       hl["active"] and hl["clearBtn"] and hl["pathEdges"] == 2 and
                       js(d, "clearPathHighlight(); return pathHighlight===null") is True, hl)
+
+                # The canvas itself must receive the path styling. Assert on the
+                # real draw() strokes rather than only the pathHighlight state, so
+                # a regression in the renderer (not the state) is caught.
+                js(d, "highlightPath(%s);" % json.dumps(out_paths[0]))
+                rend = js(d, """const orig=ctx.stroke.bind(ctx); const rec=[];
+                    ctx.stroke=function(){ rec.push({c:String(ctx.strokeStyle), w:ctx.lineWidth, a:ctx.globalAlpha}); orig(); };
+                    draw(); ctx.stroke=orig;
+                    const keys=[...pathHighlight.edges];
+                    return {edges:keys.length,
+                            onPath:keys.map(k=>{const e=edges.find(x=>edgeKey(x)===k); return e?pathEdgeInfo(e):null;}),
+                            strokes:rec};""")
+                wide = [s for s in rend["strokes"] if s["w"] >= 4 and s["a"] >= 0.9]
+                subdued = [s for s in rend["strokes"] if abs(s["a"] - 0.05) < 0.001]
+                check("every edge on the selected route is rendered with the path highlight",
+                      rend["edges"] == 2 and all(o is not None for o in rend["onPath"]) and len(wide) >= 2,
+                      {"onPath": rend["onPath"], "wide": len(wide)})
+                check("unrelated edges are subdued (not removed) while a path is focused",
+                      len(subdued) >= 1, {"subdued": len(subdued)})
+                js(d, "clearPathHighlight();")
+
+                # Clicking a node and opening the Inspector must not clear the route.
+                js(d, "highlightPath(%s);" % json.dumps(out_paths[0]))
+                persist = js(d, """const before=pathHighlight.edges.size;
+                    const first=[...pathHighlight.nodes][0];
+                    focusNode(byId.get(first));
+                    selectNode(byId.get(first));
+                    return {before:before, after:pathHighlight?pathHighlight.edges.size:null,
+                            selected:selectedNode?selectedNode.id:null, first:first};""")
+                check("clicking a node or opening the Inspector keeps the path highlight",
+                      persist["after"] == persist["before"] and persist["selected"] == persist["first"],
+                      persist)
+                js(d, "clearPathHighlight();")
 
             # ---- 11b. Path Explorer UI integration --------------------
             js(d, "location.hash='#/paths';")

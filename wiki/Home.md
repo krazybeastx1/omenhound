@@ -28,6 +28,7 @@ collector ──Graph JSON──▶ ingest ──▶ Store ──▶ Neo4j (Bloo
 | Install it and see something work in 60 seconds | **[Getting Started](Getting-Started)** |
 | Understand the design | **[How It Works](How-It-Works)** |
 | Learn the web UI | **[Web UI Guide](Web-UI-Guide)** |
+| Browse the offence library | **[Technique Library](Technique-Library)** |
 | Know what is safe / gated / logged | **[Operations & Hardening](Operations-and-Hardening)** |
 | Use the HTTP API | **[API Reference](API-Reference)** |
 | Run BloodHound Cypher against OmenHound data | **[Neo4j Schema & Attack Paths](Neo4j-Schema-and-Attack-Paths)** |

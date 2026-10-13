@@ -756,7 +756,7 @@ function draw() {
     ctx.stroke();
 
     if (prefs.arrows && (highlighted || (!dimmed && k >= 1.6))) {
-      drawArrow(ctx, ax, ay, bx, by, ctx.strokeStyle, (isSel || isHover || incident) ? 0.95 : 0.4);
+      drawArrow(ctx, ax, ay, bx, by, ctx.strokeStyle, (isSel || isHover || incident || onPath) ? 0.95 : 0.4);
     }
   }
   ctx.globalAlpha = 1;
@@ -800,12 +800,19 @@ function draw() {
     ctx.fillStyle = COLORS[node.kind] || "#888";
     ctx.fill();
 
-    // Path ring: keep the category fill, add an outer ring so every intermediate
-    // node on a discovered route is unmistakable.
+    // Path ring: keep the category fill, add a soft glow plus a crisp outer ring
+    // so every intermediate node on a discovered route is unmistakable.
     if (onPath) {
+      const pc = pathNodeColor(node.id) || "#ffd600";
+      ctx.globalAlpha = 0.3;
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = pc;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 6, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.globalAlpha = 1;
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = pathNodeColor(node.id) || "#ffd600";
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = pc;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
       ctx.stroke();
@@ -1237,12 +1244,12 @@ function pathEdgeInfo(e) {
   for (let i = 0; i < paths.length; i++) if (paths[i].edges.has(key)) members.push(i);
   if (pathHighlight.selected >= 0) {
     if (members.indexOf(pathHighlight.selected) !== -1) {
-      return { color: paths[pathHighlight.selected].color, width: 3.6, alpha: 0.98, secondary: false };
+      return { color: paths[pathHighlight.selected].color, width: 4.6, alpha: 1, secondary: false };
     }
-    return { color: "#94a3b8", width: 2.2, alpha: 0.45, secondary: true };
+    return { color: "#94a3b8", width: 2.4, alpha: 0.45, secondary: true };
   }
   const i = members.length ? members[0] : 0;
-  return { color: paths[i] ? paths[i].color : "#ffd600", width: 3.4, alpha: 0.95, secondary: false };
+  return { color: paths[i] ? paths[i].color : "#ffd600", width: 4.4, alpha: 1, secondary: false };
 }
 
 // Ring colour for a node on a highlighted path (the category fill is kept).
@@ -1649,6 +1656,8 @@ async function selectEdge(e) {
     }
   }
 
+  const readEl = document.getElementById("edge-read");
+  const readWrap = document.getElementById("edge-read-wrap");
   const cmdEl = document.getElementById("edge-command");
   const opsecEl = document.getElementById("edge-opsec");
   const eventsEl = document.getElementById("edge-events");
@@ -1656,6 +1665,8 @@ async function selectEdge(e) {
   const altsWrap = document.getElementById("edge-alts-wrap");
   const altsEl = document.getElementById("edge-alts");
   const propsEl = document.getElementById("edge-props");
+  if (readEl) readEl.textContent = "loading…";
+  if (readWrap) readWrap.hidden = false;
   if (cmdEl) cmdEl.textContent = "loading…";
   if (opsecEl) opsecEl.textContent = "";
   if (eventsEl) eventsEl.textContent = "";
@@ -1680,6 +1691,8 @@ async function selectEdge(e) {
 
   try {
     const r = await apiGet(`/api/v1/abuse?src=${encodeURIComponent(e.source)}&kind=${encodeURIComponent(e.kind)}&dst=${encodeURIComponent(e.target)}`);
+    if (readEl) readEl.textContent = r.read || "";
+    if (readWrap) readWrap.hidden = !r.read;
     if (cmdEl) cmdEl.textContent = r.command || "";
     if (opsecEl) opsecEl.textContent = r.opsec || "";
     if (eventsEl) eventsEl.textContent = (r.event_ids && r.event_ids.length) ? "Event IDs: " + r.event_ids.join(", ") : "";
@@ -1691,6 +1704,95 @@ async function selectEdge(e) {
   } catch (err) {
     if (cmdEl) cmdEl.textContent = "No abuse template available: " + err.message;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Technique library (Inspector, shown when nothing is selected)
+// ---------------------------------------------------------------------------
+
+let libraryCategories = null;
+
+async function loadAbuseLibrary() {
+  const body = document.getElementById("libraryBody");
+  if (!body) return;
+  if (libraryCategories) { renderAbuseLibrary(); return; }
+  body.innerHTML = stateHTML("loading", "Loading techniques…");
+  try {
+    const j = await apiGet("/api/v1/abuse/playbook");
+    libraryCategories = j.categories || [];
+    renderAbuseLibrary();
+  } catch (e) {
+    body.innerHTML = stateHTML("error", "Failed to load the technique library", e.message);
+  }
+}
+
+function renderAbuseLibrary() {
+  const body = document.getElementById("libraryBody");
+  if (!body || !libraryCategories) return;
+  const q = (val("librarySearch") || "").toLowerCase();
+  const hit = (t) => !q || [t.title, t.edge, t.summary, t.read, t.command, t.opsec, (t.tags || []).join(" ")]
+    .some((v) => (v || "").toLowerCase().includes(q));
+  const groups = libraryCategories
+    .map((c) => ({ ...c, techniques: (c.techniques || []).filter(hit) }))
+    .filter((c) => c.techniques.length);
+  if (!groups.length) {
+    body.innerHTML = stateHTML("empty", "No techniques match the filter");
+    return;
+  }
+  body.innerHTML = groups.map((c) => `
+    <details class="lib-category"${q ? " open" : ""}>
+      <summary>${esc(c.title)}<span class="count">${c.techniques.length}</span></summary>
+      ${c.note ? `<p class="muted small">${esc(c.note)}</p>` : ""}
+      <div class="lib-techs">${c.techniques.map(libraryTechHTML).join("")}</div>
+    </details>`).join("");
+}
+
+function libraryTechHTML(t) {
+  const alts = (t.alternates || []).filter(Boolean);
+  const altsHTML = alts.length
+    ? `<details class="lib-alts"><summary>Alternates (${alts.length})</summary><pre>${esc(alts.join("\n"))}</pre></details>`
+    : "";
+  const events = (t.event_ids || []).length
+    ? `<div class="lib-tech-events">Detection events: ${esc(t.event_ids.join(", "))}</div>` : "";
+  const badge = t.edge
+    ? `<span class="lib-tech-edge" title="Corresponds to a graph edge">edge · ${esc(t.edge)}</span>`
+    : `<span class="lib-tech-edge standalone" title="Not tied to a single edge">standalone</span>`;
+  const read = t.read
+    ? `<div class="lib-step"><div class="lib-step-head"><span class="lib-step-label read">Read</span><span class="lib-step-note">verify the condition</span><button type="button" class="copy-btn lib-copy-read" title="Copy read command" aria-label="Copy read command">📋</button></div><pre class="lib-read">${esc(t.read)}</pre></div>`
+    : "";
+  return `<article class="lib-tech">
+    <div class="lib-tech-head">
+      <span class="lib-tech-title">${esc(t.title)}</span>${badge}
+      <button type="button" class="copy-btn lib-copy" title="Copy add command" aria-label="Copy add command">📋</button>
+    </div>
+    ${t.summary ? `<p class="lib-tech-summary muted small">${esc(t.summary)}</p>` : ""}
+    ${read}
+    <div class="lib-step"><div class="lib-step-head"><span class="lib-step-label add">Add</span><span class="lib-step-note">perform the change</span></div><pre class="lib-cmd">${esc(t.command)}</pre></div>
+    ${altsHTML}
+    ${t.opsec ? `<div class="lib-tech-opsec"><strong>OPSEC</strong> ${esc(t.opsec)}</div>` : ""}
+    ${events}
+    ${t.requires ? `<div class="lib-tech-requires">Requires: ${esc(t.requires)}</div>` : ""}
+  </article>`;
+}
+
+function wireAbuseLibrary() {
+  const body = document.getElementById("libraryBody");
+  if (!body) return;
+  body.addEventListener("click", (ev) => {
+    const readBtn = ev.target.closest(".lib-copy-read");
+    if (readBtn) {
+      const pre = readBtn.closest(".lib-tech") ? readBtn.closest(".lib-tech").querySelector(".lib-read") : null;
+      if (pre) copyText(pre.textContent, "Read command copied");
+      return;
+    }
+    const btn = ev.target.closest(".lib-copy");
+    if (!btn) return;
+    const pre = btn.closest(".lib-tech") ? btn.closest(".lib-tech").querySelector(".lib-cmd") : null;
+    if (pre) copyText(pre.textContent, "Add command copied");
+  });
+  const search = document.getElementById("librarySearch");
+  if (search) search.addEventListener("input", renderAbuseLibrary);
+  loadAbuseLibrary();
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,13 +2019,25 @@ function openEdgeModal(e) {
         <dt>target_sid</dt><dd>${esc(e.target)}</dd>
         ${Object.entries(e.props || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("")}
       </dl>
-      <h3>Dynamic Abuse Command</h3>
+      <h3>Dynamic Abuse Commands</h3>
+      <div id="modal-edge-read-wrap">
+        <h4 class="cmd-step">Read <span class="muted">— verify the condition</span></h4>
+        <div class="command-block"><pre id="modal-edge-read">loading…</pre></div>
+      </div>
+      <h4 class="cmd-step">Add <span class="muted">— perform the change</span></h4>
       <div class="command-block"><pre id="modal-edge-command">loading…</pre></div>`;
   }
   toggleModalButtons({ graph: true, path: true });
   openModal();
   apiGet(`/api/v1/abuse?src=${encodeURIComponent(e.source)}&kind=${encodeURIComponent(e.kind)}&dst=${encodeURIComponent(e.target)}`)
-    .then((r) => { const el = document.getElementById("modal-edge-command"); if (el) el.textContent = r.command || "(no template)"; })
+    .then((r) => {
+      const rEl = document.getElementById("modal-edge-read");
+      if (rEl) rEl.textContent = r.read || "";
+      const rWrap = document.getElementById("modal-edge-read-wrap");
+      if (rWrap && !r.read) rWrap.hidden = true;
+      const el = document.getElementById("modal-edge-command");
+      if (el) el.textContent = r.command || "(no template)";
+    })
     .catch((err) => { const el = document.getElementById("modal-edge-command"); if (el) el.textContent = "No abuse template available: " + err.message; });
 }
 
@@ -3924,6 +4038,13 @@ function wireToolbar() {
   const openInGraph = document.getElementById("openInGraph");
   if (openInGraph) openInGraph.addEventListener("click", () => { if (selectedNode) centerSelection(); });
 
+  const copyReadBtn = document.getElementById("copyRead");
+  if (copyReadBtn) {
+    copyReadBtn.addEventListener("click", () => {
+      const pre = document.getElementById("edge-read");
+      if (pre && navigator.clipboard) navigator.clipboard.writeText(pre.textContent).catch(() => {});
+    });
+  }
   const copyCommandBtn = document.getElementById("copyCommand");
   if (copyCommandBtn) {
     copyCommandBtn.addEventListener("click", () => {
@@ -4030,6 +4151,7 @@ function init() {
   wireIngestMgmt();
   wirePathExplorer();
   wireAttacks();
+  wireAbuseLibrary();
   wireGlobalSearch();
 
   const startView = parseHash();

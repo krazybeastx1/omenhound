@@ -86,7 +86,10 @@ Returns a single `Node`, or `404 {"error":"node not found"}`.
 
 ### `GET /api/v1/abuse?src=<SID>&kind=<EdgeKind>&dst=<SID>`
 
-Renders the dynamic abuse instruction for a concrete edge.
+Renders the dynamic abuse instruction for a concrete edge. The `read` field is the
+verify/enumerate step, `command` the act step (labeled **Read** / **Add** in the UI);
+both are interpolated from the two nodes' real properties, and missing values become
+`<unknown>` plus a `warnings[]` entry.
 
 ```json
 {
@@ -94,6 +97,7 @@ Renders the dynamic abuse instruction for a concrete edge.
   "source": { /* Node */ },
   "target": { /* Node */ },
   "summary": "Full control over the target object …",
+  "read": "impacket-dacledit -action read -target-dn CN=jdoe,OU=Users,DC=omenhound,DC=lab 'omenhound.lab/jdoe:<password>'",
   "command": "bloodyAD --host dc01.omenhound.lab -d omenhound.lab -u jdoe -p '<password>' set password 'Domain Admins' 'NewPassw0rd!42'",
   "alternates": ["impacket-dacledit …"],
   "opsec": "unicodePwd over LDAPS (4724) …",
@@ -109,6 +113,30 @@ not found.
 
 ```json
 { "edges": ["GenericAll", "WriteDacl", "MemberOf", "AdminTo", "…"] }
+```
+
+### `GET /api/v1/abuse/playbook`
+
+The grouped, edge-agnostic **technique library** — 10 categories / 54 techniques
+(33 edge-backed + 21 standalone). Commands keep their `{PLACEHOLDER}` tokens and are
+reference material only; read-only. See [Technique Library](Technique-Library) for
+the full walkthrough.
+
+```json
+{ "categories": [ {
+  "id": "acl", "title": "Access control (ACL)", "note": "These are graph edges…",
+  "techniques": [ {
+    "id": "GenericAll", "title": "Full control over the object", "edge": "GenericAll",
+    "summary": "Full control over the target object …",
+    "read": "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
+    "command": "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set password {TARGET_SAM} 'NewPassw0rd!42'",
+    "alternates": ["impacket-dacledit …"],
+    "opsec": "unicodePwd over LDAPS (4724) …",
+    "event_ids": [4724, 5136],
+    "requires": "Type 1 (relationship): requires {SOURCE_SAM} credentials.",
+    "tags": ["acl", "write"]
+  } ]
+} ] }
 ```
 
 ### `POST /api/v1/paths/shortest`  ·  `GET /api/v1/paths/shortest`

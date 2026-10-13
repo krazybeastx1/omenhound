@@ -4,6 +4,7 @@
 - [Getting Started](Getting-Started)
 - [How It Works](How-It-Works)
 - [Web UI Guide](Web-UI-Guide)
+- [Technique Library](Technique-Library)
 - [Operations & Hardening](Operations-and-Hardening)
 - [API Reference](API-Reference)
 - [Neo4j Schema & Attack Paths](Neo4j-Schema-and-Attack-Paths)
