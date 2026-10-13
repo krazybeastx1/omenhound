@@ -3,15 +3,29 @@ PKG     := github.com/krazybeastx1/omenhound
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: all build install test vet lint fmt clean run-sample test-ui
+# Where the NetExec module is installed. nxc loads user modules from
+# ~/.nxc/modules/ (filename must equal the module name).
+NXC_MODULES ?= $(HOME)/.nxc/modules
+
+.PHONY: all build install install-nxc uninstall-nxc test vet lint fmt clean run-sample test-ui test-nxc
 
 all: vet test build
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/omenhound
 
-install:
+install: install-nxc
 	go install -trimpath -ldflags "$(LDFLAGS)" ./cmd/omenhound
+
+# Copy contrib/nxc/omenhound.py into the user's nxc modules dir. The loader
+# requires the filename to equal the module name, so it must stay omenhound.py.
+install-nxc:
+	install -d "$(NXC_MODULES)"
+	install -m 0644 contrib/nxc/omenhound.py "$(NXC_MODULES)/omenhound.py"
+	@echo "installed $(NXC_MODULES)/omenhound.py — verify: nxc smb -M omenhound --list-modules"
+
+uninstall-nxc:
+	rm -f "$(NXC_MODULES)/omenhound.py"
 
 test:
 	go test ./...
@@ -53,3 +67,8 @@ test-ui: build
 # Publish wiki/*.md to the project GitHub wiki (see wiki/README.md).
 wiki:
 	scripts/publish-wiki.sh
+
+# Offline tests for the NetExec module in contrib/nxc (python3 only; no AD, nxc or
+# live server required — the script stubs the OmenHound API contract).
+test-nxc:
+	python3 scripts/nxc_omenhound_test.py
