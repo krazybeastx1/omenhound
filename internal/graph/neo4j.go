@@ -218,6 +218,42 @@ func (s *Neo4jStore) DeleteEdge(ctx context.Context, source, target string, kind
 	})
 }
 
+// clearBatch bounds how many nodes a single Clear transaction removes. Deleting
+// a whole large graph in one transaction can exhaust Neo4j's transaction
+// memory, so Clear loops in bounded batches instead.
+const clearBatch = 5000
+
+// Clear implements Store by deleting every node and relationship in the
+// configured database.
+//
+// The store treats the target database as *the* graph (AllNodes and Stats run
+// unbounded MATCH (n) / MATCH ()-[r]->()), so Clear matches that scope. Point
+// --neo4j-db at a database dedicated to OmenHound before using it; this is
+// destructive and irreversible.
+func (s *Neo4jStore) Clear(ctx context.Context) error {
+	for {
+		deleted := 0
+		err := s.write(ctx, func(tx neo4j.ManagedTransaction) error {
+			r, err := tx.Run(ctx,
+				fmt.Sprintf("MATCH (n) WITH n LIMIT %d DETACH DELETE n RETURN count(*) AS c", clearBatch),
+				nil)
+			if err != nil {
+				return err
+			}
+			if r.Next(ctx) {
+				deleted = asInt(r.Record(), "c")
+			}
+			return r.Err()
+		})
+		if err != nil {
+			return err
+		}
+		if deleted == 0 {
+			return nil
+		}
+	}
+}
+
 // Neighbors implements Store (outgoing edges).
 func (s *Neo4jStore) Neighbors(ctx context.Context, id string) ([]model.Edge, error) {
 	return s.edges(ctx, "MATCH (a {id:$id})-[r]->(b) RETURN a.id AS src, b.id AS tgt, type(r) AS kind", id)

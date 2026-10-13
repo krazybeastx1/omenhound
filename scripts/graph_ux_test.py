@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -100,6 +101,14 @@ FIXTURE = {
     "meta": {"collector": "ux-fixture", "domain": "uxlab.test"},
 }
 
+# A deliberately different, smaller graph used to prove that replace-mode
+# ingestion drops whatever was previously in the store.
+MINI = {
+    "nodes": [{"id": "UX-MINI-1", "kind": "User", "name": "MINIONLY", "domain": "uxlab.test"}],
+    "edges": [],
+    "meta": {"collector": "ux-mini", "domain": "uxlab.test"},
+}
+
 
 def http_get(base, path, token=None):
     req = urllib.request.Request(base.rstrip("/") + path)
@@ -113,6 +122,20 @@ def http_post(base, path, body, token=None, raw=None):
     data = raw if raw is not None else json.dumps(body).encode()
     req = urllib.request.Request(base.rstrip("/") + path, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode() or "{}")
+        except Exception:
+            return e.code, {}
+
+
+def http_delete(base, path, token=None):
+    req = urllib.request.Request(base.rstrip("/") + path, method="DELETE")
     if token:
         req.add_header("Authorization", "Bearer " + token)
     try:
@@ -405,6 +428,74 @@ def main():
         WebDriverWait(d, 10).until(lambda x: "view-graph" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
         check("navigation and ingestion views still work",
               js(d, "return nodes.length") == len(present["nodes"]))
+
+        # ---- 14/15. data management: replace-mode ingest + delete ----------
+        if args.token:
+            # Server-side guards first (these must not mutate anything).
+            st_noauth, _ = http_delete(base, "/api/v1/graph?confirm=true", token=None)
+            check("clear API rejects a request without a token",
+                  st_noauth in (401, 403), {"status": st_noauth})
+            st_noconf, nbody = http_delete(base, "/api/v1/graph", token=args.token)
+            check("clear API requires an explicit confirmation",
+                  st_noconf == 400 and "confirm" in json.dumps(nbody).lower(),
+                  {"status": st_noconf, "body": nbody})
+            st_badmode, _ = http_post(base, "/api/v1/ingest?mode=wipe", FIXTURE, token=args.token)
+            check("ingest rejects an unknown mode instead of guessing",
+                  st_badmode == 400, {"status": st_badmode})
+            check("a rejected mode/confirmation leaves the graph intact",
+                  http_get(base, "/api/v1/stats")[1].get("nodes") == len(present["nodes"]))
+
+            # The UI must expose both controls, defaulting to merge.
+            d.execute_script("arguments[0].click();",
+                             d.find_element(By.CSS_SELECTOR, '.nav-btn[data-view="ingestion"]'))
+            WebDriverWait(d, 10).until(lambda x: "view-ingestion" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
+            ctl = js(d, """return {replace: document.getElementById('ingestReplace')!==null,
+                defaultOff: document.getElementById('ingestReplace') && !document.getElementById('ingestReplace').checked,
+                del: document.getElementById('clearGraph')!==null,
+                status: document.getElementById('clearStatus').textContent};""")
+            check("ingestion view exposes a replace toggle (off by default) and a delete control",
+                  ctl["replace"] and ctl["defaultOff"] and ctl["del"] and "nodes" in ctl["status"], ctl)
+
+            # Replace-mode ingest through the actual file picker.
+            tmp = os.path.join(tempfile.gettempdir(), "omenhound_ux_mini.json")
+            with open(tmp, "w") as fh:
+                json.dump(MINI, fh)
+            js(d, "window.confirm = () => true;")
+            d.find_element(By.ID, "ingestFile").send_keys(tmp)
+            d.execute_script("document.getElementById('ingestToken').value=arguments[0];", args.token)
+            d.execute_script("document.getElementById('ingestReplace').checked=true;")
+            d.execute_script("arguments[0].click();", d.find_element(By.ID, "ingestSubmit"))
+            WebDriverWait(d, 20).until(lambda x: js(x, "return nodes.length===1 && byId.has('UX-MINI-1')"))
+            repl = js(d, "return {n:nodes.length, hasOld:byId.has('%s'), status:document.getElementById('ingestStatus').textContent}" % USER)
+            check("replace-mode ingest keeps only the uploaded graph",
+                  repl["n"] == 1 and repl["hasOld"] is False, repl)
+
+            # Seed analysis state so the reset is observable, then delete via the UI.
+            js(d, """startNodeId=nodes[0].id; targetNodeId=nodes[0].id;
+                pathHighlight={nodes:new Set([nodes[0].id]),edges:new Set(),length:0};
+                selectNode(nodes[0]); updateStartUI();""")
+            d.execute_script("arguments[0].click();", d.find_element(By.ID, "clearGraph"))
+            WebDriverWait(d, 20).until(lambda x: js(x, "return nodes.length===0"))
+            cleared = js(d, """return {n:nodes.length, e:edges.length,
+                status:document.getElementById('clearStatus').textContent,
+                start:startNodeId, target:targetNodeId, path:pathHighlight, sel:selectedNode};""")
+            check("deleting all data empties the graph and resets analysis state",
+                  cleared["n"] == 0 and cleared["e"] == 0 and cleared["start"] is None and
+                  cleared["target"] is None and cleared["path"] is None and cleared["sel"] is None,
+                  cleared)
+            sst, sstats = http_get(base, "/api/v1/stats")
+            check("the server reports an empty graph after deletion",
+                  sst == 200 and sstats.get("nodes") == 0 and sstats.get("edges") == 0, sstats)
+
+            # Leave the scratch server usable again.
+            rst, rresp = http_post(base, "/api/v1/ingest?mode=replace", FIXTURE, token=args.token)
+            check("replace-mode ingest restores exactly one dataset",
+                  rst == 200 and (rresp.get("stats") or {}).get("nodes") == len(FIXTURE["nodes"]),
+                  {"status": rst, "resp": rresp})
+        else:
+            skip("clear API token/confirmation guards", "no --token supplied")
+            skip("replace-mode ingest keeps only the uploaded graph", "no --token supplied")
+            skip("deleting all data empties the graph", "no --token supplied")
 
         # ---- console cleanliness --------------------------------------
         errs = js(d, "return window.__errs || []")

@@ -170,3 +170,96 @@ func TestWriteDisabledWithoutToken(t *testing.T) {
 		t.Fatalf("expected 403 when no token configured, got %d", w.Code)
 	}
 }
+
+func TestClearGraphAuthRequired(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	w := do(t, h, "DELETE", "/api/v1/graph?confirm=true", "", nil)
+	if w.Code != 401 {
+		t.Fatalf("expected 401 without token, got %d %s", w.Code, w.Body.String())
+	}
+	// The store must be untouched by a denied request.
+	if st, _ := srv.store.Stats(context.Background()); st.Nodes != 2 {
+		t.Fatalf("nodes = %d, want 2 (denied clear must not mutate)", st.Nodes)
+	}
+}
+
+func TestClearGraphRequiresConfirm(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	auth := map[string]string{"Authorization": "Bearer secret"}
+	w := do(t, h, "DELETE", "/api/v1/graph", "", auth)
+	if w.Code != 400 {
+		t.Fatalf("expected 400 without confirm, got %d %s", w.Code, w.Body.String())
+	}
+	if st, _ := srv.store.Stats(context.Background()); st.Nodes != 2 {
+		t.Fatalf("nodes = %d, want 2 (unconfirmed clear must not mutate)", st.Nodes)
+	}
+}
+
+func TestClearGraphEmptiesStore(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	w := do(t, h, "DELETE", "/api/v1/graph?confirm=true", "", map[string]string{"Authorization": "Bearer secret"})
+	if w.Code != 200 {
+		t.Fatalf("clear status = %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"cleared":true`) {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	if st, _ := srv.store.Stats(context.Background()); st.Nodes != 0 || st.Edges != 0 {
+		t.Fatalf("stats after clear = %+v, want 0/0", st)
+	}
+	// The read API must now report an empty graph.
+	w = do(t, h, "GET", "/api/v1/stats", "", nil)
+	if !strings.Contains(w.Body.String(), `"nodes":0`) {
+		t.Fatalf("stats body = %s", w.Body.String())
+	}
+}
+
+func TestIngestModeReplaceReplacesGraph(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	body := `{"nodes":[{"id":"Z","kind":"Computer","name":"NEWPC"}],"edges":[]}`
+	w := do(t, h, "POST", "/api/v1/ingest?mode=replace", body,
+		map[string]string{"Authorization": "Bearer secret"})
+	if w.Code != 200 {
+		t.Fatalf("replace ingest status = %d %s", w.Code, w.Body.String())
+	}
+	// The original seeded nodes must be gone.
+	if st, _ := srv.store.Stats(context.Background()); st.Nodes != 1 {
+		t.Fatalf("nodes = %d, want 1 (old graph replaced)", st.Nodes)
+	}
+	if _, ok, _ := srv.store.GetNode(context.Background(), "S-1-5-21-1-2-3-1103"); ok {
+		t.Fatal("seed node survived replace-mode ingest")
+	}
+}
+
+func TestIngestModeMergeIsDefault(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	body := `{"nodes":[{"id":"Z","kind":"Computer","name":"NEWPC"}],"edges":[]}`
+	w := do(t, h, "POST", "/api/v1/ingest", body,
+		map[string]string{"Authorization": "Bearer secret"})
+	if w.Code != 200 {
+		t.Fatalf("merge ingest status = %d %s", w.Code, w.Body.String())
+	}
+	if st, _ := srv.store.Stats(context.Background()); st.Nodes != 3 {
+		t.Fatalf("nodes = %d, want 3 (merge keeps existing)", st.Nodes)
+	}
+}
+
+func TestIngestRejectsUnknownMode(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	body := `{"nodes":[{"id":"Z","kind":"Computer"}],"edges":[]}`
+	w := do(t, h, "POST", "/api/v1/ingest?mode=wipe", body,
+		map[string]string{"Authorization": "Bearer secret"})
+	if w.Code != 400 {
+		t.Fatalf("unknown mode status = %d, want 400", w.Code)
+	}
+	// A rejected mode must not have touched the store.
+	if st, _ := srv.store.Stats(context.Background()); st.Nodes != 2 {
+		t.Fatalf("nodes = %d, want 2 (invalid mode must not mutate)", st.Nodes)
+	}
+}

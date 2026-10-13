@@ -125,8 +125,25 @@ Body: a `Graph` object. Size-bounded to 512 MiB, unknown JSON fields rejected, a
 graph is validated (vocabulary, referential integrity, size) before it touches the store.
 `Content-Type: application/json`.
 
+The optional `?mode=` query parameter controls how the graph combines with existing data:
+
+| `mode` | Behaviour |
+|---|---|
+| `merge` (default) | Upsert the incoming graph into whatever is already stored. |
+| `replace` | Clear the store first, then write — the server ends up holding only this graph. |
+
+An unknown `mode` is rejected with `400` rather than guessed, so a typo can never trigger
+the destructive replace path. Validation runs before any mutation, so a malformed payload
+never clears existing data.
+
 ```bash
+# merge (default)
 curl -sS -X POST http://127.0.0.1:8080/api/v1/ingest \
+  -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
+  --data-binary @graph.json
+
+# replace everything with this graph
+curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?mode=replace" \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
   --data-binary @graph.json
 ```
@@ -135,7 +152,28 @@ curl -sS -X POST http://127.0.0.1:8080/api/v1/ingest \
 { "nodes": 13, "edges": 14, "stats": { "nodes": 13, "edges": 14 } }
 ```
 
-Errors: `400` invalid/oversized/invalid graph, `401` unauthorized, `403` disabled.
+Errors: `400` invalid/oversized/invalid graph or unknown mode, `401` unauthorized, `403` disabled.
+
+### `DELETE /api/v1/graph`
+
+Delete every node and relationship the server currently holds. The write token is
+required, and a bare `DELETE` is refused: re-send with `?confirm=true` (accepted values
+`true`, `yes`, `1`) so a stray request cannot wipe the graph by accident.
+
+```bash
+curl -sS -X DELETE "http://127.0.0.1:8080/api/v1/graph?confirm=true" \
+  -H "Authorization: Bearer $OMENHOUND_API_TOKEN"
+```
+
+```json
+{ "cleared": true, "stats": { "nodes": 0, "edges": 0 } }
+```
+
+Errors: `400` missing confirmation, `401` unauthorized, `403` disabled.
+
+> With `--neo4j-uri` the store treats the configured database as *the* graph, so this
+> clears the whole database (all nodes). Point `--neo4j-db` at a database dedicated to
+> OmenHound before using either the delete endpoint or `mode=replace`.
 
 ### `POST /api/v1/credentials`
 

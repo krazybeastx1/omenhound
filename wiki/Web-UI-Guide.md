@@ -161,6 +161,25 @@ auth gate:
 > use. It does not weaken the server-side checks: the token is still required and
 > constant-time compared, and every write is audited.
 
+## Ingesting and deleting data
+
+The **Ingestion** view has a **Web Upload** tab and a **CLI / API Guidance** tab.
+
+- **Web Upload** picks a Graph JSON file, takes the same operator token, and sends it to
+  `POST /api/v1/ingest`.
+- **Replace existing graph** (a checkbox, **off by default**) makes that ingest *replace*
+  mode (`?mode=replace`): the current graph is deleted first, so the server ends up holding
+  only the file you uploaded. Leave it unchecked to **merge** into what is already there.
+  A confirmation dialog always precedes a replace.
+- **Delete data** clears the graph on demand: it shows the current node/edge counts and,
+  after a confirmation, calls `DELETE /api/v1/graph?confirm=true` with your token. It is
+  disabled while the graph is already empty.
+
+Use this to work with **one dataset at a time** rather than accumulating every collection
+into a single graph. Both actions reload the graph and reset the selection, start/target
+anchors and any path highlight, so nothing keeps pointing at a deleted entity. See the
+[API Reference](API-Reference) for the exact `mode` and confirmation semantics.
+
 ## Screenshot capture (for maintainers)
 
 `scripts/shots.py` regenerates the images above using Selenium + the system Chromium:
@@ -176,8 +195,9 @@ auth gate with a bad token so the `denied` state is genuine.
 ## UX tests (for maintainers)
 
 `scripts/graph_ux_test.py` drives a real browser against a running server and asserts the
-graph, Inspector, starting-node, session, credential and path behaviours. It ingests a
-self-contained fixture into a **scratch** server, so it never touches a real dataset:
+graph, Inspector, starting-node, session, credential, path and data-management
+(replace/delete) behaviours. It ingests a self-contained fixture into a **scratch** server,
+so it never touches a real dataset:
 
 ```bash
 make test-ui

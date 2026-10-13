@@ -742,6 +742,22 @@ button.lock.unlocked:hover { background: rgba(0,255,200,.2); border-color: var(-
 .ingest-details summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); }
 .ingest-details pre { background: var(--bg-elevated); border: 1px solid var(--line); border-radius: var(--rad-md); padding: var(--sp-3); font-size: var(--fs-xs); overflow: auto; margin-top: var(--sp-2); color: var(--fg-dim); }
 
+/* Replace-existing-graph toggle */
+.check-row { display: flex; align-items: flex-start; gap: 8px; margin-top: var(--sp-3); cursor: pointer; font-size: var(--fs-sm); color: var(--fg-dim); }
+.check-row input[type="checkbox"] { width: 16px; height: 16px; margin-top: 1px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.check-row:hover { color: var(--fg); }
+.muted.small { font-size: var(--fs-xs); margin: var(--sp-2) 0 0; }
+
+/* Destructive data-management block */
+.sep { border: 0; border-top: 1px solid var(--line); margin: var(--sp-4) 0; }
+.danger-zone h3 { color: var(--danger); font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 var(--sp-2); }
+.danger-zone .muted.small { margin-bottom: var(--sp-3); }
+.danger-zone .success { color: var(--success); }
+.danger-zone .warn { color: var(--warn); }
+button.danger { border-color: var(--danger); color: var(--danger); background: rgba(255,92,122,.08); }
+button.danger:hover { background: rgba(255,92,122,.18); border-color: var(--danger); color: var(--danger); }
+button.danger:disabled { opacity: 0.4; }
+
 /* Activity list */
 .activity-list { display: flex; flex-direction: column; gap: 8px; }
 .activity-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--rad-md); }

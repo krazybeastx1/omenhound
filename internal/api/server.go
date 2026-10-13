@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/abuse/supported", s.handleAbuseSupported)
 
 	mux.HandleFunc("POST /api/v1/ingest", s.handleIngest)
+	mux.HandleFunc("DELETE /api/v1/graph", s.handleClearGraph)
 	mux.HandleFunc("POST /api/v1/credentials", s.handleCredentialPut)
 	mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.handleCredentialDelete)
 	mux.HandleFunc("POST /api/v1/credentials/{id}/change-password", s.handleChangePassword)
@@ -345,21 +346,50 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !s.requireWrite(w, r) {
 		return
 	}
+	mode, err := ingest.ParseMode(r.URL.Query().Get("mode"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
 	g, err := ingest.DecodeStrict(r.Body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	res, err := ingest.Write(r.Context(), s.store, g)
+	res, err := ingest.WriteMode(r.Context(), s.store, g, mode)
 	if err != nil {
 		s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "error", Reason: err.Error(), RemoteAddr: r.RemoteAddr})
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "ok", RemoteAddr: r.RemoteAddr,
-		Fields: map[string]string{"nodes": strconv.Itoa(res.Nodes), "edges": strconv.Itoa(res.Edges)}})
+		Fields: map[string]string{"nodes": strconv.Itoa(res.Nodes), "edges": strconv.Itoa(res.Edges), "mode": string(mode)}})
 	writeJSON(w, http.StatusOK, res)
+}
+
+// handleClearGraph empties the graph store. It requires the write token and an
+// explicit ?confirm=true so a stray DELETE cannot wipe the graph by accident.
+func (s *Server) handleClearGraph(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWrite(w, r) {
+		return
+	}
+	if v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("confirm"))); v != "true" && v != "yes" && v != "1" {
+		writeErr(w, http.StatusBadRequest, "confirmation required: re-send with ?confirm=true")
+		return
+	}
+	if err := s.store.Clear(r.Context()); err != nil {
+		s.audit.Log(audit.Event{Actor: "api", Action: "clear", Result: "error", Reason: err.Error(), RemoteAddr: r.RemoteAddr})
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	stats, err := s.store.Stats(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.audit.Log(audit.Event{Actor: "api", Action: "clear", Result: "ok", RemoteAddr: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, map[string]any{"cleared": true, "stats": stats})
 }
 
 type credPutReq struct {

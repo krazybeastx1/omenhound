@@ -104,6 +104,17 @@ func (m *Memory) DeleteEdge(_ context.Context, source, target string, kind model
 	return nil
 }
 
+// Clear implements Store. It drops every node and relationship.
+func (m *Memory) Clear(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nodes = make(map[string]model.Node)
+	m.edges = make(map[string]model.Edge)
+	m.out = make(map[string]map[string]model.Edge)
+	m.in = make(map[string]map[string]model.Edge)
+	return nil
+}
+
 // GetNode implements Store.
 func (m *Memory) GetNode(_ context.Context, id string) (model.Node, bool, error) {
 	m.mu.RLock()

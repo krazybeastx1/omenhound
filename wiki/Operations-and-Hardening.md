@@ -42,7 +42,8 @@ in [`docs/THREAT-MODEL.md`](https://github.com/krazybeastx1/omenhound/blob/main/
 Every write endpoint enforces a bearer token with a **constant-time comparison**.
 
 ```
-POST   /api/v1/ingest
+POST   /api/v1/ingest                   (merge by default; ?mode=replace clears first)
+DELETE /api/v1/graph                    (confirmation required: ?confirm=true)
 POST   /api/v1/credentials
 DELETE /api/v1/credentials/{id}
 POST   /api/v1/credentials/{id}/change-password
@@ -50,6 +51,8 @@ POST   /api/v1/credentials/{id}/change-password
 
 - If `--api-token` is empty, writes return **403 "write API is disabled"**.
 - A bad/missing token returns **401 unauthorized** and is audited as a denied auth event.
+- `DELETE /api/v1/graph` is destructive, so it also requires `?confirm=true`; a bare delete
+  is refused with **400**. In `--neo4j-uri` mode it clears the whole configured database.
 - The password-change endpoint has an **additional per-action approval gate**: it requires
   the header `X-Omenhound-Approval: yes`. Without it, the request is refused with
   **428 Precondition Required** and audited as denied.

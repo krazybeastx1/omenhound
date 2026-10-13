@@ -61,3 +61,38 @@ func TestMemoryDeleteEdge(t *testing.T) {
 		t.Fatalf("edges = %d, want 0", st.Edges)
 	}
 }
+
+func TestMemoryClear(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemory()
+	_ = m.UpsertNodes(ctx, []model.Node{
+		{ID: "A", Kind: model.KindUser},
+		{ID: "B", Kind: model.KindGroup},
+	})
+	_ = m.UpsertEdges(ctx, []model.Edge{{Source: "A", Target: "B", Kind: model.EdgeMemberOf}})
+
+	if err := m.Clear(ctx); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	st, err := m.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if st.Nodes != 0 || st.Edges != 0 {
+		t.Fatalf("after clear stats = %+v, want 0/0", st)
+	}
+	// Adjacency must be empty too, not just the top-level counts.
+	if got, _ := m.Neighbors(ctx, "A"); len(got) != 0 {
+		t.Fatalf("neighbors(A) after clear = %+v, want none", got)
+	}
+	if _, ok, _ := m.GetNode(ctx, "A"); ok {
+		t.Fatal("node A still present after clear")
+	}
+	// The store must be reusable afterwards.
+	if err := m.UpsertNodes(ctx, []model.Node{{ID: "C", Kind: model.KindComputer}}); err != nil {
+		t.Fatalf("upsert after clear: %v", err)
+	}
+	if st, _ := m.Stats(ctx); st.Nodes != 1 {
+		t.Fatalf("nodes after reuse = %d, want 1", st.Nodes)
+	}
+}

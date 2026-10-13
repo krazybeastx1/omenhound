@@ -460,7 +460,12 @@
               <label>Operator Token</label>
               <input id="ingestToken" type="password" placeholder="omh_xxx" autocomplete="off" aria-label="Operator token" />
             </div>
-            <div id="ingestStatus" class="muted"></div>
+            <label class="check-row">
+              <input type="checkbox" id="ingestReplace" />
+              <span>Replace existing graph (delete all current data before ingesting)</span>
+            </label>
+            <p class="muted small">Off by default: an ingest merges into the graph you already have. Turn it on to end up with only the file you upload.</p>
+            <div id="ingestStatus" class="muted" aria-live="polite"></div>
             <div class="modal-actions">
               <button id="ingestSubmit" class="primary">Ingest Graph</button>
             </div>
@@ -468,6 +473,15 @@
               <summary>Expected Graph JSON Format</summary>
               <pre>{"nodes":[{"id":"S-1-...","kind":"User","name":"...","domain":"...","sam_account_name":"...","distinguished_name":"...","props":{}}],"edges":[{"source":"S-1-...","target":"S-1-...","kind":"GenericAll"}],"meta":{"collector":"ldap","version":"...","domain":"...","started_at":"...","finished_at":"..."}}</pre>
             </details>
+            <hr class="sep" />
+            <div class="danger-zone">
+              <h3>Delete data</h3>
+              <p class="muted small">Remove every node and relationship the server currently holds, so you can start again from a single dataset. This cannot be undone.</p>
+              <div id="clearStatus" class="muted" aria-live="polite">Current graph: —</div>
+              <div class="modal-actions">
+                <button id="clearGraph" class="danger">🗑 Delete all graph data</button>
+              </div>
+            </div>
           </div>
           <div class="tab-panel" id="tab-cli" hidden>
             <h3>Collector (LDAP + SMB)</h3>

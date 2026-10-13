@@ -30,6 +30,11 @@ type Store interface {
 	DeleteNode(ctx context.Context, id string) error
 	// DeleteEdge removes a single relationship.
 	DeleteEdge(ctx context.Context, source, target string, kind model.EdgeKind) error
+	// Clear removes every node and relationship from the store, leaving it
+	// empty. It backs the explicit "clear graph" action and replace-mode
+	// ingestion. Callers are responsible for confirming intent: this is
+	// destructive and not reversible.
+	Clear(ctx context.Context) error
 	// GetNode returns one node by ID. The bool is false when absent.
 	GetNode(ctx context.Context, id string) (model.Node, bool, error)
 	// Neighbors returns outgoing edges from id.

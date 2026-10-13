@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/krazybeastx1/omenhound/internal/graph"
 	"github.com/krazybeastx1/omenhound/pkg/model"
@@ -113,10 +114,54 @@ func decode(r io.Reader, strict bool) (*model.Graph, error) {
 	return &g, nil
 }
 
-// Write validates then upserts a graph into the store.
+// Mode controls how an ingestion combines with data already in the store.
+type Mode string
+
+const (
+	// ModeMerge upserts the incoming graph into whatever is already there.
+	// It is the default and preserves the historical behaviour.
+	ModeMerge Mode = "merge"
+	// ModeReplace clears the store first, so the server ends up holding only
+	// the newly ingested graph. This is what "focus on one ingestion" means.
+	ModeReplace Mode = "replace"
+)
+
+// ParseMode maps a request value onto a Mode. An empty value means merge.
+// Unknown values are rejected rather than coerced, so a typo can never trigger
+// the destructive replace path by accident.
+func ParseMode(s string) (Mode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(ModeMerge):
+		return ModeMerge, nil
+	case string(ModeReplace):
+		return ModeReplace, nil
+	default:
+		return "", fmt.Errorf("ingest: unknown mode %q (want merge or replace)", s)
+	}
+}
+
+// Write validates then upserts a graph into the store (merge mode).
 func Write(ctx context.Context, st graph.Store, g *model.Graph) (Result, error) {
+	return WriteMode(ctx, st, g, ModeMerge)
+}
+
+// WriteMode validates then writes a graph into the store under the given mode.
+//
+// Validation happens before any mutation, so a malformed payload never clears
+// existing data. In replace mode Clear runs first; if the subsequent write
+// fails the store is left empty rather than half-written — the caller sees the
+// error and can re-ingest, and nothing is silently merged.
+func WriteMode(ctx context.Context, st graph.Store, g *model.Graph, mode Mode) (Result, error) {
+	if mode == "" {
+		mode = ModeMerge
+	}
 	if err := Validate(g); err != nil {
 		return Result{}, err
+	}
+	if mode == ModeReplace {
+		if err := st.Clear(ctx); err != nil {
+			return Result{}, fmt.Errorf("ingest: clear: %w", err)
+		}
 	}
 	if err := st.UpsertNodes(ctx, g.Nodes); err != nil {
 		return Result{}, fmt.Errorf("ingest: upsert nodes: %w", err)

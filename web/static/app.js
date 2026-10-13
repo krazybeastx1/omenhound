@@ -1648,6 +1648,7 @@ function renderView(name) {
     loadAbout();
   } else if (name === "ingestion") {
     populateIngestionCommands();
+    refreshDataMgmt();
   }
 }
 
@@ -2261,6 +2262,33 @@ function populateIngestionCommands() {
   }
 }
 
+// Reflect the current graph size in the Ingestion "Delete data" block.
+async function refreshDataMgmt() {
+  const el = document.getElementById("clearStatus");
+  const btn = document.getElementById("clearGraph");
+  if (!el && !btn) return;
+  try {
+    const s = await apiGet("/api/v1/stats");
+    const nodes = Number(s.nodes) || 0, edges = Number(s.edges) || 0;
+    if (el) { el.textContent = `Current graph: ${nodes} nodes · ${edges} edges`; el.className = "muted"; }
+    if (btn) btn.disabled = nodes === 0 && edges === 0;
+  } catch (_) {
+    if (el) { el.textContent = "Current graph: unavailable"; el.className = "muted"; }
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Drop selection, start/target anchors and path highlight after the graph is
+// replaced or cleared, so no control keeps pointing at a deleted entity.
+function resetGraphUI() {
+  startNodeId = null;
+  targetNodeId = null;
+  pathHighlight = null;
+  isolateMode = false;
+  clearSelection();
+  updateStartUI();
+}
+
 function wireIngestion() {
   document.querySelectorAll(".ingestion-tabs .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2300,30 +2328,75 @@ function wireIngestion() {
       const fileEl = document.getElementById("ingestFile");
       const tokenEl = document.getElementById("ingestToken");
       const statusEl = document.getElementById("ingestStatus");
+      const replaceEl = document.getElementById("ingestReplace");
       const file = fileEl && fileEl.files ? fileEl.files[0] : null;
       const token = tokenEl ? tokenEl.value.trim() : "";
+      const replace = !!(replaceEl && replaceEl.checked);
       if (!file || !token) {
         if (statusEl) { statusEl.textContent = "Select a Graph JSON file and provide an operator token."; statusEl.className = "warn"; }
         return;
       }
-      if (statusEl) { statusEl.textContent = "Uploading…"; statusEl.className = "muted"; }
+      if (replace && !window.confirm("Replace the existing graph? All current data will be deleted before ingesting this file.")) {
+        if (statusEl) { statusEl.textContent = "Cancelled — nothing was changed."; statusEl.className = "muted"; }
+        return;
+      }
+      if (statusEl) { statusEl.textContent = replace ? "Replacing graph…" : "Uploading…"; statusEl.className = "muted"; }
       try {
         const text = await file.text();
-        const res = await fetch("/api/v1/ingest", {
+        const url = replace ? "/api/v1/ingest?mode=replace" : "/api/v1/ingest";
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
           body: text,
         });
         const r = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(r.error || res.statusText);
-        if (statusEl) { statusEl.textContent = `OK: ${r.nodes} nodes, ${r.edges} edges ingested`; statusEl.className = "success"; }
+        if (statusEl) { statusEl.textContent = `OK: ${r.nodes} nodes, ${r.edges} edges ${replace ? "replaced" : "ingested"}`; statusEl.className = "success"; }
         operatorToken = token;
         setLock(true);
-        toast(`Ingested ${r.nodes} nodes, ${r.edges} edges`, "success");
-        if (prefs.autoRefresh) await refresh();
+        toast(`${replace ? "Replaced with" : "Ingested"} ${r.nodes} nodes, ${r.edges} edges`, "success");
+        if (replace) { resetGraphUI(); await reloadGraph(); }
+        else if (prefs.autoRefresh) await refresh();
+        await refreshDataMgmt();
       } catch (err) {
         if (statusEl) { statusEl.textContent = "Error: " + err.message; statusEl.className = "warn"; }
         toast("Ingest failed: " + err.message, "error");
+      }
+    });
+  }
+
+  const clearBtn = document.getElementById("clearGraph");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      const tokenEl = document.getElementById("ingestToken");
+      const statusEl = document.getElementById("clearStatus");
+      let token = tokenEl ? tokenEl.value.trim() : "";
+      if (!token && operatorToken) token = operatorToken;
+      if (!token) {
+        if (statusEl) { statusEl.textContent = "Enter an operator token above, then try again."; statusEl.className = "warn"; }
+        toast("Operator token required to delete data", "warn");
+        return;
+      }
+      const stats = await apiGet("/api/v1/stats").catch(() => null);
+      const summary = stats ? `${Number(stats.nodes) || 0} nodes and ${Number(stats.edges) || 0} edges` : "all graph data";
+      if (!window.confirm(`Delete ${summary}? This cannot be undone.`)) return;
+      if (statusEl) { statusEl.textContent = "Deleting…"; statusEl.className = "muted"; }
+      try {
+        const res = await fetch("/api/v1/graph?confirm=true", {
+          method: "DELETE",
+          headers: { Authorization: "Bearer " + token },
+        });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(r.error || res.statusText);
+        operatorToken = token;
+        setLock(true);
+        resetGraphUI();
+        await reloadGraph();
+        await refreshDataMgmt();
+        toast("All graph data deleted", "success");
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = "Error: " + err.message; statusEl.className = "warn"; }
+        toast("Delete failed: " + err.message, "error");
       }
     });
   }

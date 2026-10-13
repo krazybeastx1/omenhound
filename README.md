@@ -93,7 +93,7 @@ OmenHound is a from-scratch Go implementation of the BloodHound model:
 | **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and over **SMB/RPC** (`-c session`/`localadmin`/`rdp`/`dcom`/`psremote`/`loggedon` → `HasSession`/`AdminTo`/`CanRDP`/`ExecuteDCOM`/`CanPSRemote`), emitting a graph. Simple bind, NTLM and pass-the-hash (LDAPS recommended); BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
-| **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. |
+| **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. Ingest can **merge** (default) or **replace** the current graph, and the UI can **delete** all data so you work with one dataset at a time. |
 | **Dynamic abuse engine** | For every edge, renders a copy-pasteable abuse command by interpolating **real node properties**, with a per-technique **OPSEC/detection note** and Windows event IDs. |
 | **Gated credential ops** | Optional, off-by-default ability to change an AD password over LDAPS (`unicodePwd`), behind token + explicit-approval + audit gates. |
 
@@ -151,6 +151,22 @@ export OMENHOUND_PASSWORD='...'          # avoid --password on the CLI
 curl -sS -X POST http://127.0.0.1:8080/api/v1/ingest \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
   --data-binary @corp.json
+```
+
+By default an ingest **merges** into whatever the server already holds. To end up with
+**only** this collection, use replace mode; to wipe the graph entirely, delete it. Both are
+also available in the web UI's **Ingestion** page (a *Replace existing graph* checkbox and a
+*Delete data* control), including the same confirmation steps.
+
+```bash
+# replace: delete everything, then ingest this graph
+curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?mode=replace" \
+  -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
+  --data-binary @corp.json
+
+# delete all data (confirmation is required)
+curl -sS -X DELETE "http://127.0.0.1:8080/api/v1/graph?confirm=true" \
+  -H "Authorization: Bearer $OMENHOUND_API_TOKEN"
 ```
 
 ### Serve with Neo4j
