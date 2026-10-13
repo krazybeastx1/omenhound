@@ -18,13 +18,25 @@ func TestRenderGenericAll(t *testing.T) {
 	if r.Command == "" {
 		t.Fatal("empty command")
 	}
+	if r.Read == "" {
+		t.Fatal("empty read (verify) command")
+	}
 	for _, ph := range []string{phDomain, phDC, phSourceSAM, phTargetSAM, phTargetDN, phTargetSID, phSourceDN, phSourceSID, phTargetName} {
 		if strings.Contains(r.Command, ph) {
 			t.Errorf("unresolved placeholder %s in %q", ph, r.Command)
 		}
+		if strings.Contains(r.Read, ph) {
+			t.Errorf("unresolved placeholder %s in read %q", ph, r.Read)
+		}
 	}
 	if !strings.Contains(r.Command, "jdoe") {
 		t.Errorf("command should contain the real source sAMAccountName: %q", r.Command)
+	}
+	if !strings.Contains(r.Read, "jdoe") {
+		t.Errorf("read command should contain the real source sAMAccountName: %q", r.Read)
+	}
+	if r.Read == r.Command {
+		t.Errorf("read and add must be distinct steps: %q", r.Read)
 	}
 	if r.OPSEC == "" {
 		t.Error("expected an OPSEC note")

@@ -13,6 +13,7 @@ type Rendered struct {
 	Source     model.Node `json:"source"`
 	Target     model.Node `json:"target"`
 	Summary    string     `json:"summary"`
+	Read       string     `json:"read,omitempty"`
 	Command    string     `json:"command"`
 	Alternates []string   `json:"alternates,omitempty"`
 	OPSEC      string     `json:"opsec,omitempty"`
@@ -71,6 +72,7 @@ func Render(e model.Edge, src, tgt model.Node) (Rendered, bool) {
 		Source:   src,
 		Target:   tgt,
 		Summary:  t.Summary,
+		Read:     interpolate(t.Read, vars),
 		Command:  interpolate(t.Command, vars),
 		OPSEC:    t.OPSEC,
 		EventIDs: t.EventIDs,
@@ -80,7 +82,7 @@ func Render(e model.Edge, src, tgt model.Node) (Rendered, bool) {
 	}
 	// Honest warnings: surface missing data instead of silently emitting a
 	// broken command.
-	if strings.Contains(r.Command, unknown) {
+	if strings.Contains(r.Command, unknown) || strings.Contains(r.Read, unknown) {
 		r.Warnings = append(r.Warnings, "one or more placeholders could not be resolved from graph properties; fill them manually")
 	}
 	if vars[phDC] == unknown {

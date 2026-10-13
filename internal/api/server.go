@@ -119,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/paths/shortest", s.handlePathsShortest)
 	mux.HandleFunc("GET /api/v1/abuse", s.handleAbuse)
 	mux.HandleFunc("GET /api/v1/abuse/supported", s.handleAbuseSupported)
+	mux.HandleFunc("GET /api/v1/abuse/playbook", s.handleAbusePlaybook)
 	mux.HandleFunc("GET /api/v1/analytics", s.handleAnalyticsQueries)
 	mux.HandleFunc("GET /api/v1/analytics/{id}", s.handleAnalyticsRun)
 
@@ -140,10 +141,23 @@ func (s *Server) Handler() http.Handler {
 
 	sub, err := fs.Sub(web.FS, "static")
 	if err == nil {
-		mux.Handle("/", http.FileServer(http.FS(sub)))
+		mux.Handle("/", noStore(http.FileServer(http.FS(sub))))
 	}
 
 	return securityHeaders(s.limiter.middleware(s.recover(mux)))
+}
+
+// noStore disables client caching for the embedded UI. The assets are compiled
+// into the binary and carry no Last-Modified/ETag (embed.FS has no modtime), so
+// browsers were free to reuse a stale app.js/styles.css after an upgrade. The
+// files are tiny and served from memory, so always refetching is cheap and
+// guarantees the running binary's UI is the one the browser executes.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) recover(next http.Handler) http.Handler {
@@ -335,6 +349,12 @@ func (s *Server) handleAbuse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rendered)
+}
+
+// handleAbusePlaybook returns the grouped, edge-agnostic technique library for
+// the Inspector. It is reference material: commands keep their placeholders.
+func (s *Server) handleAbusePlaybook(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"categories": abuse.Playbook()})
 }
 
 // handleAnalyticsQueries lists the canned attack-path queries available.

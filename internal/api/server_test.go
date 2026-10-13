@@ -59,6 +59,19 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestStaticAssetsDisableClientCache(t *testing.T) {
+	h := newTestServer(t).Handler()
+	for _, p := range []string{"/", "/app.js", "/styles.css"} {
+		w := do(t, h, "GET", p, "", nil)
+		if w.Code != 200 {
+			t.Fatalf("GET %s = %d", p, w.Code)
+		}
+		if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+			t.Fatalf("GET %s Cache-Control = %q, want no-store", p, cc)
+		}
+	}
+}
+
 func TestStatsAndGraph(t *testing.T) {
 	h := newTestServer(t).Handler()
 	w := do(t, h, "GET", "/api/v1/stats", "", nil)
@@ -137,6 +150,23 @@ func TestAbuseEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "jdoe") || !strings.Contains(w.Body.String(), "opsec") {
 		t.Fatalf("abuse body = %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"read"`) || !strings.Contains(w.Body.String(), "dacledit") {
+		t.Fatalf("abuse body missing the read (verify) step: %s", w.Body.String())
+	}
+}
+
+func TestAbusePlaybookEndpoint(t *testing.T) {
+	h := newTestServer(t).Handler()
+	w := do(t, h, "GET", "/api/v1/abuse/playbook", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("playbook status = %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"categories"`, `"acl"`, `"coercion"`, `"adcs"`, "GenericAll", "{DOMAIN}", `"read"`, "dacledit"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("playbook body missing %q", want)
+		}
 	}
 }
 

