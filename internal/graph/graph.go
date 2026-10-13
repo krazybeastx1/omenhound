@@ -91,7 +91,13 @@ type ShortestPathRequest struct {
 	ExcludeNodeTypes            []model.Kind
 	IncludeRelationshipTypes    []model.EdgeKind
 	ExcludeRelationshipTypes    []model.EdgeKind
+	IncludeDomains              []string
+	ExcludeDomains              []string
 	RequiredIntermediateNodeIDs []string
+	// Alternative requests a bounded enumeration of simple paths in increasing
+	// length order rather than only the shortest ones. Results may include
+	// routes longer than the shortest; callers must label them as such.
+	Alternative bool
 }
 
 // Path is an ordered sequence of nodes and edges forming a path.

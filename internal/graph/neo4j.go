@@ -592,7 +592,16 @@ func (s *Neo4jStore) SearchNodes(ctx context.Context, q string, kind model.Kind,
 	return nodes, total, nil
 }
 
-// ShortestPaths implements Store with BFS-style Cypher? For general constraints, simpler to do in-memory for now if small; but we have Neo4j. For compatibility, implement a basic shortestPath with depth limit.
+// ShortestPaths implements Store using Neo4j's allShortestPaths. The traversal
+// pattern follows req.Direction; include/exclude filters and required
+// intermediates are applied after retrieval so semantics match the in-memory
+// backend. Relationship orientation is preserved (stored Source -> Target) so
+// the UI can highlight the same edges it already has.
+//
+// Note: this backend is not covered by the automated test suite, which runs
+// against the in-memory store. The implementation targets the Neo4j Go driver
+// v5 graph types and degrades to an empty result rather than an error if a
+// returned record cannot be interpreted.
 func (s *Neo4jStore) ShortestPaths(ctx context.Context, req ShortestPathRequest) (ShortestPathResult, error) {
 	if req.SourceID == "" || req.TargetID == "" {
 		return ShortestPathResult{}, nil
@@ -603,17 +612,42 @@ func (s *Neo4jStore) ShortestPaths(ctx context.Context, req ShortestPathRequest)
 	if req.MaxPaths <= 0 {
 		req.MaxPaths = 10
 	}
+	if req.MaxPaths > maxPathLimit {
+		req.MaxPaths = maxPathLimit
+	}
+
+	var pattern string
+	switch req.Direction {
+	case Incoming:
+		pattern = fmt.Sprintf("(a {id:$from})<-[*1..%d]-(b {id:$to})", req.MaxDepth)
+	case Undirected:
+		pattern = fmt.Sprintf("(a {id:$from})-[*1..%d]-(b {id:$to})", req.MaxDepth)
+	default: // Outgoing
+		pattern = fmt.Sprintf("(a {id:$from})-[*1..%d]->(b {id:$to})", req.MaxDepth)
+	}
+	query := "MATCH p = allShortestPaths(" + pattern + ") RETURN p LIMIT $limit"
+
 	session := s.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: s.database, AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
+
 	v, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		q := fmt.Sprintf("MATCH p = shortestPath((a {id:$from})-[*1..%d]-(b {id:$to})) RETURN p LIMIT $limit", req.MaxDepth)
-		r, err := tx.Run(ctx, q, map[string]any{"from": req.SourceID, "to": req.TargetID, "limit": req.MaxPaths})
+		r, err := tx.Run(ctx, query, map[string]any{"from": req.SourceID, "to": req.TargetID, "limit": req.MaxPaths})
 		if err != nil {
 			return nil, err
 		}
 		var paths []Path
 		for r.Next(ctx) {
-			// skip complex path parsing for now to keep compiling
+			raw, ok := r.Record().Get("p")
+			if !ok {
+				continue
+			}
+			p, ok := raw.(neo4j.Path)
+			if !ok {
+				continue
+			}
+			if path, ok := neo4jPathToPath(p, req); ok {
+				paths = append(paths, path)
+			}
 		}
 		return paths, r.Err()
 	})
@@ -621,8 +655,69 @@ func (s *Neo4jStore) ShortestPaths(ctx context.Context, req ShortestPathRequest)
 		return ShortestPathResult{}, err
 	}
 	paths, _ := v.([]Path)
-	trunc := len(paths) >= req.MaxPaths
-	return ShortestPathResult{Paths: paths, Truncated: trunc}, nil
+	if paths == nil {
+		paths = []Path{}
+	}
+	return ShortestPathResult{Paths: paths, Truncated: len(paths) >= req.MaxPaths}, nil
+}
+
+// neo4jPathToPath converts a driver path into the store's Path, dropping
+// relationships that fail the request's filters. It returns ok=false when the
+// route cannot be represented faithfully (unanchored relationship, filtered
+// node kind, or missing required intermediate) so no partial path is reported.
+func neo4jPathToPath(p neo4j.Path, req ShortestPathRequest) (Path, bool) {
+	idByElement := make(map[string]string, len(p.Nodes))
+	nodes := make([]model.Node, 0, len(p.Nodes))
+	ids := make([]string, 0, len(p.Nodes))
+	for i, n := range p.Nodes {
+		m := neo4jNodeToModel(n)
+		if m.ID == "" {
+			m.ID = n.ElementId
+		}
+		idByElement[n.ElementId] = m.ID
+		nodes = append(nodes, m)
+		ids = append(ids, m.ID)
+		// Match the in-memory backend: the source is not subject to node-type
+		// filters, every other node (including the target) is.
+		if i > 0 && !nodeAllowed(m, req) {
+			return Path{}, false
+		}
+	}
+	rels := make([]model.Edge, 0, len(p.Relationships))
+	for _, r := range p.Relationships {
+		src := idByElement[r.StartElementId]
+		dst := idByElement[r.EndElementId]
+		if src == "" || dst == "" || !relAllowed(model.EdgeKind(r.Type), req) {
+			return Path{}, false
+		}
+		rels = append(rels, model.Edge{Source: src, Target: dst, Kind: model.EdgeKind(r.Type)})
+	}
+	if !hasRequired(ids, req.RequiredIntermediateNodeIDs) {
+		return Path{}, false
+	}
+	return Path{Nodes: nodes, Relationships: rels, Length: len(rels)}, true
+}
+
+// neo4jNodeToModel maps a driver node to the store's Node using the property
+// names UpsertNodes writes.
+func neo4jNodeToModel(n neo4j.Node) model.Node {
+	out := model.Node{
+		ID:             asMapString(n.Props, "id"),
+		Name:           asMapString(n.Props, "name"),
+		Domain:         asMapString(n.Props, "domain"),
+		SAMAccountName: asMapString(n.Props, "sam"),
+		DN:             asMapString(n.Props, "dn"),
+	}
+	if raw, ok := n.Props["props"].(map[string]any); ok {
+		out.Props = mapStringAny(raw)
+	}
+	for _, l := range n.Labels {
+		if k := kindFromLabelName(l); k != "" {
+			out.Kind = k
+			break
+		}
+	}
+	return out
 }
 
 func asMapString(m map[string]any, k string) string {

@@ -111,6 +111,62 @@ not found.
 { "edges": ["GenericAll", "WriteDacl", "MemberOf", "AdminTo", "…"] }
 ```
 
+### `POST /api/v1/paths/shortest`  ·  `GET /api/v1/paths/shortest`
+
+Shortest routes between a source and a target. `POST` takes the request as JSON;
+`GET` takes the same fields as query parameters (`from`, `to`, `direction`,
+`max_depth`, `max_paths`). Read-only — the graph is never modified.
+
+```json
+{
+  "source_id": "S-1-5-21-…-1103",
+  "target_id": "S-1-5-21-…-512",
+  "direction": "outgoing",
+  "max_depth": 6,
+  "max_paths": 10,
+  "include_node_types": ["User", "Group"],
+  "exclude_node_types": [],
+  "include_relationship_types": ["MemberOf", "GenericAll"],
+  "exclude_relationship_types": [],
+  "include_domains": ["corp.local"],
+  "exclude_domains": [],
+  "alternative": false,
+  "required_intermediate_node_ids": []
+}
+```
+
+| Field | Notes |
+|---|---|
+| `direction` | `outgoing` (default), `incoming` or `undirected`. |
+| `max_depth` | Hop limit (default 6). |
+| `max_paths` | Cap on returned routes (default 10, hard cap 100). |
+| `include_/exclude_*` | Optional allow/deny lists for node kinds and relationship kinds. |
+| `include_domains` / `exclude_domains` | Restrict traversal to nodes in (or not in) the listed domains. The source node is exempt so a scoped search can still run; the target is filtered like any other node. |
+| `alternative` | `false` (default) returns only minimum-hop routes; `true` also enumerates longer **simple** routes in increasing length order (bounded by `max_paths`, `max_depth` and the backend expansion budget). |
+| `required_intermediate_node_ids` | Routes must pass through every listed node. |
+
+```json
+{
+  "paths": [
+    {
+      "nodes": [{"id": "S-1-…", "kind": "User", "name": "jdoe"}, {}],
+      "relationships": [{"source": "S-1-…", "target": "S-2-…", "kind": "MemberOf"}],
+      "length": 1
+    }
+  ],
+  "truncated": false
+}
+```
+
+The search returns up to `max_paths` **distinct shortest routes of equal length** —
+not every possible route. With `alternative: true` the same walk continues past the
+minimum hop count to enumerate longer **simple** routes, still in increasing length order;
+the caller can label the first (shortest) routes apart from the rest. Relationships are
+always returned in their **stored** orientation (`source → target`), even for
+`incoming`/`undirected` traversal, so a caller can match them against the dataset.
+`truncated` is `true` when a search limit (max paths, or the backend's expansion budget)
+stopped the walk early.
+
 ### `GET /api/v1/analytics`
 
 Lists the canned attack-path queries.
@@ -175,20 +231,27 @@ Body: a `Graph` object. Size-bounded to 512 MiB, unknown JSON fields rejected, a
 graph is validated (vocabulary, referential integrity, size) before it touches the store.
 `Content-Type: application/json`.
 
-The optional `?mode=` query parameter controls how the graph combines with existing data:
+Query parameters:
 
-| `mode` | Behaviour |
+| Parameter | Behaviour |
 |---|---|
-| `merge` (default) | Upsert the incoming graph into whatever is already stored. |
-| `replace` | Clear the store first, then write — the server ends up holding only this graph. |
+| `mode` | `merge` (default) or `replace`. An unknown value is a `400`, never guessed. |
+| `domain` | Restrict the import to one domain. Entities that declare a **different** domain are rejected (or skipped, see `on_mismatch`); the file is *not* assumed to belong to the selected domain. |
+| `on_mismatch` | `reject` (default) or `skip`: what to do with entities whose own domain differs from `domain`. |
+| `unknown` | `keep` (default) or `stamp`. `stamp` assigns `domain` to entities that carry no domain of their own; the default leaves them unassigned and rejects them. |
+| `source` | Free-form provenance label (usually the filename), recorded on the batch. |
 
-An unknown `mode` is rejected with `400` rather than guessed, so a typo can never trigger
-the destructive replace path. Validation runs before any mutation, so a malformed payload
-never clears existing data.
+Without `domain` the historical behaviour is kept: every domain present in the file is
+imported as-is. A scoped import **never** silently defaults to "all domains".
 
 ```bash
-# merge (default)
+# merge (default) — import everything in the file
 curl -sS -X POST http://127.0.0.1:8080/api/v1/ingest \
+  -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
+  --data-binary @graph.json
+
+# import only the corp.local objects, rejecting anything else
+curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?domain=corp.local&on_mismatch=reject&source=corp.json" \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
   --data-binary @graph.json
 
@@ -199,12 +262,110 @@ curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?mode=replace" \
 ```
 
 ```json
-{ "nodes": 13, "edges": 14, "stats": { "nodes": 13, "edges": 14 } }
+{
+  "nodes": 13, "edges": 14,
+  "stats": { "nodes": 13, "edges": 14 },
+  "tracked": true,
+  "batch": { "id": "batch_20261013T134707.747_c4e579dc78", "domain": "corp.local", "status": "completed" }
+}
 ```
 
-Errors: `400` invalid/oversized/invalid graph or unknown mode, `401` unauthorized, `403` disabled.
+`tracked` is `true` when the store records ingestion provenance (the in-memory store does).
+`mode=replace` with a `domain` clears **only that domain** first, so other domains survive.
+
+Errors: `400` invalid/oversized/invalid graph, unknown mode, or a domain mismatch under
+`on_mismatch=reject`; `401` unauthorized; `403` disabled.
+
+### `POST /api/v1/ingest/preview`
+
+Dry run: validate an upload against a scope with the same `domain`, `on_mismatch` and
+`unknown` parameters and return what *would* be written. Nothing is stored.
+
+```json
+{
+  "preview": {
+    "domain": "corp.local",
+    "domains": ["corp.local"],
+    "nodes": 13, "edges": 14,
+    "assigned_nodes": 13, "stamped_nodes": 0,
+    "mismatch_nodes": 0, "skipped_nodes": 0, "skipped_edges": 0,
+    "cross_domain_edges": 0
+  }
+}
+```
+
+A domain mismatch under `on_mismatch=reject` returns `422` with the same `preview` plus an
+`error` string, so the UI can show exactly which objects would be refused.
+
+### `GET /api/v1/ingest/batches`
+
+Ingestion history, newest first. Each batch carries its `id`, `source`, `domain`,
+`domains`, `mode`, `status` (`completed` / `partial` / `failed`), created/updated counters,
+skipped counts and any errors. A batch id is provenance metadata, **not** an AD identity.
+
+### `GET /api/v1/ingest/batches/{id}`
+
+One batch's metadata. `404` if unknown.
+
+### `POST /api/v1/ingest/batches/{id}/delete-preview`
+
+Compute the impact of deleting everything a batch introduced, without deleting anything.
+The response is a `DeletionPreview`:
+
+```json
+{
+  "scope": "batch", "target": "batch_…",
+  "delete_nodes": 13, "delete_edges": 14,
+  "preserved_nodes": 0, "preserved_edges": 0,
+  "shared_nodes": 0, "legacy_nodes": 0,
+  "warnings": [],
+  "token": "sha256:…"
+}
+```
+
+Records that another import also needs (`shared_nodes`) are **preserved**; relationships
+incident to a deleted node are always removed (the model forbids dangling edges) and any
+forced removal is reported in `warnings`. `token` fingerprints the exact plan.
+
+### `DELETE /api/v1/ingest/batches/{id}`
+
+Delete a batch's data. Requires `?confirm=true` and the `token` from a fresh preview;
+if the graph changed since the preview the request is rejected with `409` and a new
+preview is required. Returns a `DeletionResult` (`deleted_nodes`, `deleted_edges`,
+`preserved_nodes`, `preserved_edges`, `batch_removed`).
+
+### `GET /api/v1/ingest/domains`
+
+Ingested domains with their node/edge/batch counts.
+
+### `POST /api/v1/ingest/domains/{domain}/delete-preview`  ·  `DELETE /api/v1/ingest/domains/{domain}`
+
+Same preview-then-confirm workflow scoped to a whole domain. `DELETE` requires
+`?confirm=true` plus the preview `token`. Only that domain's records are removed; records
+shared with another domain's import are preserved, and dependent relationships are
+reported before anything is committed.
+
+### `POST /api/v1/ingest/records/delete-preview`  ·  `POST /api/v1/ingest/records/delete`
+
+Preview and delete an explicit selection *within* a scope (a batch or a domain):
+
+```json
+{ "scope": "domain", "target": "corp.local",
+  "node_ids": ["S-1-5-21-…-1103"], "edge_keys": ["S-1-…\u0000MemberOf\u0000S-2-…"] }
+```
+
+The backend validates every id against the scope and refuses ids that are not part of it,
+so a crafted request cannot delete outside the labelled scope.
+
+> **Scoped deletion needs provenance.** These endpoints work on any store that implements
+> the `IngestManager` contract (the default in-memory store does). A store that cannot
+> track provenance returns `501` with a clear message rather than performing an unscoped
+> delete. The Neo4j backend currently does **not** implement provenance, so scoped deletion
+> is unavailable there; use it with the in-memory store, or clear the whole database with
+> `DELETE /api/v1/graph` on a database dedicated to OmenHound.
 
 ### `DELETE /api/v1/graph`
+
 
 Delete every node and relationship the server currently holds. The write token is
 required, and a bare `DELETE` is refused: re-send with `?confirm=true` (accepted values

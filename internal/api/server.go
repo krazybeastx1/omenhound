@@ -123,6 +123,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/analytics/{id}", s.handleAnalyticsRun)
 
 	mux.HandleFunc("POST /api/v1/ingest", s.handleIngest)
+	mux.HandleFunc("POST /api/v1/ingest/preview", s.handleIngestPreview)
+	mux.HandleFunc("GET /api/v1/ingest/batches", s.handleListBatches)
+	mux.HandleFunc("GET /api/v1/ingest/batches/{id}", s.handleGetBatch)
+	mux.HandleFunc("POST /api/v1/ingest/batches/{id}/delete-preview", s.handleBatchDeletePreview)
+	mux.HandleFunc("DELETE /api/v1/ingest/batches/{id}", s.handleBatchDelete)
+	mux.HandleFunc("GET /api/v1/ingest/domains", s.handleIngestDomains)
+	mux.HandleFunc("POST /api/v1/ingest/domains/{domain}/delete-preview", s.handleDomainDeletePreview)
+	mux.HandleFunc("DELETE /api/v1/ingest/domains/{domain}", s.handleDomainDelete)
+	mux.HandleFunc("POST /api/v1/ingest/records/delete-preview", s.handleRecordsDeletePreview)
+	mux.HandleFunc("POST /api/v1/ingest/records/delete", s.handleRecordsDelete)
 	mux.HandleFunc("DELETE /api/v1/graph", s.handleClearGraph)
 	mux.HandleFunc("POST /api/v1/credentials", s.handleCredentialPut)
 	mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.handleCredentialDelete)
@@ -369,9 +379,20 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if !s.requireWrite(w, r) {
 		return
 	}
-	mode, err := ingest.ParseMode(r.URL.Query().Get("mode"))
+	q := r.URL.Query()
+	mode, err := ingest.ParseMode(q.Get("mode"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sc := ingest.Scope{Domain: q.Get("domain"), OnMismatch: q.Get("on_mismatch")}
+	switch strings.ToLower(strings.TrimSpace(q.Get("unknown"))) {
+	case "", "keep", "reject":
+		sc.StampUnknown = false
+	case "stamp", "assign":
+		sc.StampUnknown = true
+	default:
+		writeErr(w, http.StatusBadRequest, "unknown= must be keep or stamp")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
@@ -380,14 +401,20 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	res, err := ingest.WriteMode(r.Context(), s.store, g, mode)
+	res, err := ingest.WriteScoped(r.Context(), s.store, g, sc, mode, q.Get("source"))
 	if err != nil {
 		s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "error", Reason: err.Error(), RemoteAddr: r.RemoteAddr})
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "ok", RemoteAddr: r.RemoteAddr,
-		Fields: map[string]string{"nodes": strconv.Itoa(res.Nodes), "edges": strconv.Itoa(res.Edges), "mode": string(mode)}})
+	fields := map[string]string{"nodes": strconv.Itoa(res.Nodes), "edges": strconv.Itoa(res.Edges), "mode": string(mode)}
+	if res.Batch != nil {
+		fields["batch"] = res.Batch.ID
+	}
+	if res.Batch != nil && res.Batch.Domain != "" {
+		fields["domain"] = res.Batch.Domain
+	}
+	s.audit.Log(audit.Event{Actor: "api", Action: "ingest", Result: "ok", RemoteAddr: r.RemoteAddr, Fields: fields})
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -743,7 +770,10 @@ type pathRequest struct {
 	ExcludeNodeTypes            []model.Kind     `json:"exclude_node_types"`
 	IncludeRelationshipTypes    []model.EdgeKind `json:"include_relationship_types"`
 	ExcludeRelationshipTypes    []model.EdgeKind `json:"exclude_relationship_types"`
+	IncludeDomains              []string         `json:"include_domains"`
+	ExcludeDomains              []string         `json:"exclude_domains"`
 	RequiredIntermediateNodeIDs []string         `json:"required_intermediate_node_ids"`
+	Alternative                 bool             `json:"alternative"`
 }
 
 func (s *Server) handlePathsShortest(w http.ResponseWriter, r *http.Request) {
@@ -788,7 +818,10 @@ func (s *Server) handlePathsShortest(w http.ResponseWriter, r *http.Request) {
 		ExcludeNodeTypes:            req.ExcludeNodeTypes,
 		IncludeRelationshipTypes:    req.IncludeRelationshipTypes,
 		ExcludeRelationshipTypes:    req.ExcludeRelationshipTypes,
+		IncludeDomains:              req.IncludeDomains,
+		ExcludeDomains:              req.ExcludeDomains,
 		RequiredIntermediateNodeIDs: req.RequiredIntermediateNodeIDs,
+		Alternative:                 req.Alternative,
 	}
 	if greq.MaxDepth <= 0 {
 		greq.MaxDepth = 5

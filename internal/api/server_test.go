@@ -320,3 +320,52 @@ func TestIngestRejectsUnknownMode(t *testing.T) {
 		t.Fatalf("nodes = %d, want 2 (invalid mode must not mutate)", st.Nodes)
 	}
 }
+
+func TestPathsShortestEndpoint(t *testing.T) {
+	st := graph.NewMemory()
+	ctx := context.Background()
+	if err := st.UpsertNodes(ctx, []model.Node{
+		{ID: "S", Kind: model.KindUser, Name: "start"},
+		{ID: "A", Kind: model.KindGroup, Name: "grpA"},
+		{ID: "B", Kind: model.KindGroup, Name: "grpB"},
+		{ID: "T", Kind: model.KindDomain, Name: "target"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertEdges(ctx, []model.Edge{
+		{Source: "S", Target: "A", Kind: model.EdgeMemberOf},
+		{Source: "S", Target: "B", Kind: model.EdgeGenericWrite},
+		{Source: "A", Target: "T", Kind: model.EdgeGenericAll},
+		{Source: "B", Target: "T", Kind: model.EdgeDCSync},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Config{StoreIface: st, Version: "test"}).Handler()
+
+	w := do(t, h, "POST", "/api/v1/paths/shortest",
+		`{"source_id":"S","target_id":"T","direction":"outgoing","max_depth":5,"max_paths":10}`, nil)
+	if w.Code != 200 {
+		t.Fatalf("paths status = %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"length":2`) {
+		t.Fatalf("expected a 2-hop path, got %s", body)
+	}
+	// Two equal-length routes must both come back.
+	if n := strings.Count(body, `"relationships"`); n != 2 {
+		t.Fatalf("relationships count = %d, want 2 distinct routes: %s", n, body)
+	}
+
+	// max_paths caps the result and is reported.
+	w = do(t, h, "POST", "/api/v1/paths/shortest",
+		`{"source_id":"S","target_id":"T","direction":"outgoing","max_depth":5,"max_paths":1}`, nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"truncated":true`) {
+		t.Fatalf("max_paths=1 = %d %s", w.Code, w.Body.String())
+	}
+
+	// GET form with query parameters works too.
+	w = do(t, h, "GET", "/api/v1/paths/shortest?from=S&to=T&direction=outgoing&max_depth=5", "", nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"paths"`) {
+		t.Fatalf("GET paths = %d %s", w.Code, w.Body.String())
+	}
+}

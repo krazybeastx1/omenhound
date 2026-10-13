@@ -27,7 +27,7 @@ The toolbar is grouped by purpose:
 | Search | find node (name / SAM / SID) |
 | Filtering | node-kind filter, relationship filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
 | Display | node labels, edge labels, arrows, legend |
-| Analysis | open **Path Explorer** from the starting node |
+| Analysis | **Find Paths** between start and target, open **Path Explorer** from the starting node, toggle the route panel |
 
 ## Starting node, selection and target
 
@@ -40,9 +40,9 @@ Three roles are kept deliberately separate and are **never inferred** from one a
 - **Target node** — the destination used by path analysis.
 
 Picking a result in *Start from…* sets the starting node, selects and centres it, and
-shows a `start` chip; the canvas marks it with a **double ring + S badge**. The target is
-marked with a **dashed ring + T badge**. Shape and letter carry the meaning, so it
-survives greyscale and colour-blind rendering.
+shows a `start` chip; the canvas marks it with a solid **green** ring and a `START`
+caption (the target gets a dashed **red** ring and a `TARGET` caption). Shape, letter and
+caption all carry the meaning, so it survives greyscale and colour-blind rendering.
 
 ## Inspecting a node
 
@@ -89,11 +89,26 @@ as proof that authentication would succeed. The shipped collectors do not emit `
 
 ## Path Explorer integration
 
-Set the source and target from the graph (the *⇄ Paths* toolbar button uses the starting
-node, or the current selection). The results honour **direction** (outgoing / incoming /
-undirected) and node/relationship-type filters, and any path can be pushed back onto the
-canvas with **⌖ Show on graph**, highlighting its nodes and edges until cleared. Paths are
-graph evidence — a connection is never presented as an exploitable attack path.
+Set the source and target from the graph: **Find Paths** runs the search between the
+starting node and the target, and the *⇄ Paths* toolbar button opens the view from the
+starting node or the current selection. Results honour **direction** (outgoing / incoming /
+undirected), node and relationship-type filters, max depth and max paths, and appear both
+in the *Paths* view and in the collapsible **Path Explorer** panel beside the canvas (a
+hidden panel takes no space from the graph).
+
+The backend returns up to *max paths* **distinct shortest routes of equal length** — not
+every possible route; when a search limit is hit the UI says so rather than implying a
+complete set. With no route selected every route is highlighted in its own colour;
+selecting a route focuses it and dims the others (without deleting anything), and
+unrelated nodes/edges are faded but kept. Each entry shows *Path N*, start/target name and
+type, hop and node counts, intermediate nodes in traversal order, relationship types, and a
+coverage status (**complete** / **audit unknown**) — which is about data coverage, never
+exploitability. Controls: **Show all**, **Focus**, **↑ Prev** / **↓ Next**, **⛶ Fit**,
+**⇄ Reverse**, **⭳ Export** (JSON) and **Clear**. **⌖ Show on graph** pushes a route back
+onto the canvas, highlighting its nodes and edges until cleared.
+
+Internally this is a read-only breadth-first search over the loaded graph; it never mutates
+the dataset. A connection is graph evidence — never presented as an exploitable attack path.
 
 ## Attack Paths (canned analytics)
 
@@ -178,22 +193,50 @@ auth gate:
 
 ## Ingesting and deleting data
 
-The **Ingestion** view has a **Web Upload** tab and a **CLI / API Guidance** tab.
+The **Ingestion** view has a **Web Upload**, an **Ingestion Management** and a
+**CLI / API Guidance** tab.
 
 - **Web Upload** picks a Graph JSON file, takes the same operator token, and sends it to
-  `POST /api/v1/ingest`.
+  `POST /api/v1/ingest`. A **Domain scope** box lets you restrict the import to one domain
+  (type it or pick a known one), choose what happens to objects that declare a *different*
+  domain (`reject` — the default — or `skip`) and whether objects with no domain of their
+  own may be `stamp`ed with the selected domain. Leaving the domain empty imports every
+  domain in the file, exactly as before. A scoped import never silently falls back to "all
+  domains".
+- **Preview** runs `POST /api/v1/ingest/preview` first: a dry run that reports how many
+  nodes/relationships would be written, matched, stamped, skipped and cross-domain, without
+  writing anything.
 - **Replace existing graph** (a checkbox, **off by default**) makes that ingest *replace*
   mode (`?mode=replace`): the current graph is deleted first, so the server ends up holding
-  only the file you uploaded. Leave it unchecked to **merge** into what is already there.
-  A confirmation dialog always precedes a replace.
-- **Delete data** clears the graph on demand: it shows the current node/edge counts and,
-  after a confirmation, calls `DELETE /api/v1/graph?confirm=true` with your token. It is
-  disabled while the graph is already empty.
+  only the file you uploaded. With a domain scope selected it replaces only **that domain's**
+  data and leaves the other domains intact. Leave it unchecked to **merge**. A confirmation
+  dialog always precedes a replace and names the exact scope.
+- **Delete data** (in the danger zone) clears the **whole** graph on demand: it shows the
+  current counts and, after a confirmation, calls `DELETE /api/v1/graph?confirm=true`. This
+  is the only *global* deletion and is deliberately labelled as global.
 
-Use this to work with **one dataset at a time** rather than accumulating every collection
-into a single graph. Both actions reload the graph and reset the selection, start/target
-anchors and any path highlight, so nothing keeps pointing at a deleted entity. See the
-[API Reference](API-Reference) for the exact `mode` and confirmation semantics.
+The **Ingestion Management** tab is where *scoped* deletion lives, kept visually separate
+from the global clear:
+
+- A **batch history** lists every import with its id, source file, domain, time,
+  created/updated counts and status, and a **domains** table lists each domain with its
+  counts.
+- **Preview delete** on a batch or a domain computes the impact first — nodes/relationships
+  to delete, nodes/relationships **preserved** because another import shares them, and any
+  legacy records with no provenance. Nothing is removed until you confirm.
+- Confirming deletes exactly that scope. A domain deletion additionally requires you to
+  **type the domain name** to confirm. The server re-validates the preview when you confirm;
+  if the graph changed in the meantime the deletion is rejected and you re-preview, so a
+  stale plan can never delete more than you saw.
+
+Both actions reload the graph and reset the selection, start/target anchors and any path
+highlight, so nothing keeps pointing at a deleted entity. See the
+[API Reference](API-Reference) for the exact `mode`, scope and confirmation semantics.
+
+> Scoped deletion needs ingestion provenance: it works on the default in-memory store, and
+> a backend that cannot track provenance returns a clear error instead of deleting blindly.
+> With `--neo4j-uri`, use the global *Delete data* only on a database dedicated to OmenHound.
+
 
 ## Screenshot capture (for maintainers)
 
@@ -210,9 +253,10 @@ auth gate with a bad token so the `denied` state is genuine.
 ## UX tests (for maintainers)
 
 `scripts/graph_ux_test.py` drives a real browser against a running server and asserts the
-graph, Inspector, starting-node, session, credential, path and data-management
-(replace/delete) behaviours. It ingests a self-contained fixture into a **scratch** server,
-so it never touches a real dataset:
+graph, Inspector, starting-node, session, credential, path (including alternative routes,
+the domain filter and inspect-from-the-drawer), domain-scoped ingestion, the ingestion
+management tab and data-management (replace/delete) behaviours. It ingests a self-contained
+fixture into a **scratch** server, so it never touches a real dataset:
 
 ```bash
 make test-ui

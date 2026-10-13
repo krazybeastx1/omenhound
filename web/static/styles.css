@@ -853,3 +853,138 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
 .attack-related { margin-top: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--muted-strong); }
 .attack-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
 .attack-actions .muted { margin: 0; }
+/* ------------------------------------------------------------------ */
+/* Path Explorer drawer: collapsible panel beside the graph canvas.    */
+/* Closed it takes no space; open it narrows the canvas like the       */
+/* Inspector does, so it never covers the graph.                       */
+/* ------------------------------------------------------------------ */
+.path-drawer {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 340px;
+  width: 340px;
+  min-width: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+.path-drawer[hidden] { display: none; }
+.path-drawer.collapsed { flex-basis: 42px; width: 42px; }
+.path-drawer.collapsed .path-drawer-body,
+.path-drawer.collapsed .path-drawer-controls,
+.path-drawer.collapsed .path-drawer-summary,
+.path-drawer.collapsed h2,
+.path-drawer.collapsed #pathDrawerCount { display: none; }
+.path-drawer.collapsed .path-drawer-header { justify-content: center; padding: var(--sp-2); border-bottom: none; }
+.path-drawer-header { display: flex; align-items: center; gap: 8px; padding: var(--sp-3); border-bottom: 1px solid var(--line); }
+.path-drawer-header h2 { font-size: var(--fs-md); font-weight: 600; margin: 0; white-space: nowrap; }
+.path-drawer-actions { margin-left: auto; display: flex; gap: 4px; }
+.path-drawer-summary { padding: 6px var(--sp-3) 0; word-break: break-word; }
+.path-drawer-body { flex: 1; overflow: auto; padding: var(--sp-3); }
+.path-drawer-controls { display: flex; flex-wrap: wrap; gap: 6px; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line); }
+.path-drawer .path-item { cursor: pointer; }
+.path-drawer .path-item.active { border-color: var(--accent); box-shadow: var(--shadow-glow); }
+
+/* Richer path cards (used by the drawer and the Path Explorer view). */
+.path-index { color: var(--accent); font-weight: 600; font-size: var(--fs-xs); }
+.path-status { font-size: 9.5px; padding: 1px 7px; border-radius: var(--rad-sm); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; border: 1px solid; }
+.path-status.ok { color: var(--accent2); border-color: var(--accent2); background: rgba(0,255,200,.08); }
+.path-status.warn { color: var(--warn); border-color: var(--warn); background: rgba(255,184,77,.08); }
+.path-trail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.path-node { display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 8px; border-radius: var(--rad-sm); border: 1px solid var(--line); background: var(--panel3); font-size: var(--fs-xs); color: var(--fg-dim); }
+.path-node.source { border-color: #22c55e; color: #4ade80; }
+.path-node.target { border-color: #ff5c3a; color: #ff8c6a; }
+.path-node .pn-kind { font-size: 9px; opacity: 0.65; text-transform: uppercase; letter-spacing: 0.04em; }
+.path-arrow { color: var(--muted); }
+.path-rels { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.path-rel { font-size: var(--fs-xs); color: var(--accent2); background: var(--panel3); border: 1px solid var(--line); border-radius: var(--rad-sm); padding: 1px 6px; }
+.path-arrow-sep { color: var(--muted); }
+.path-mid, .path-note { margin-top: 4px; }
+.path-empty-note { border: 1px dashed var(--line); border-radius: var(--rad-md); padding: var(--sp-3); color: var(--muted); font-size: var(--fs-sm); }
+
+/* ---------------------------------------------------------------------------
+   Domain-scoped ingestion & ingestion management
+--------------------------------------------------------------------------- */
+
+.scope-box {
+  border: 1px solid var(--line);
+  border-radius: var(--rad-md);
+  padding: var(--sp-3);
+  margin: var(--sp-3) 0;
+  background: var(--panel2);
+}
+.scope-box legend {
+  padding: 0 6px;
+  font-size: var(--fs-xs);
+  color: var(--muted-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+.scope-box p.muted.small { margin: 0 0 var(--sp-2); }
+.inline-fields { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3); }
+@media (max-width: 900px) { .inline-fields { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 600px) { .inline-fields { grid-template-columns: 1fr; } }
+
+.ingest-preview,
+.del-preview {
+  border: 1px solid var(--line);
+  border-radius: var(--rad-md);
+  background: var(--panel2);
+  padding: var(--sp-3);
+  margin: var(--sp-3) 0;
+}
+.ingest-preview h4,
+.del-preview h4 { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); }
+.del-preview .count-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0;
+}
+.del-preview .count-cell {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--rad-sm);
+  padding: 8px 10px;
+}
+.del-preview .count-cell .n { font-size: var(--fs-lg); font-weight: 600; color: var(--fg); display: block; }
+.del-preview .count-cell .l { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.del-preview .count-cell.danger .n { color: var(--danger); }
+.del-preview .count-cell.safe .n { color: var(--success); }
+.del-preview ul.warnings { margin: var(--sp-2) 0 0; padding-left: 18px; color: var(--warn); font-size: var(--fs-xs); }
+.del-preview .sample { margin-top: var(--sp-2); }
+.del-confirm { border-top: 1px solid var(--line); margin-top: var(--sp-3); padding-top: var(--sp-3); }
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--rad-sm);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid var(--line);
+}
+.status-pill.completed { color: var(--success); border-color: var(--success); }
+.status-pill.partial { color: var(--warn); border-color: var(--warn); }
+.status-pill.failed { color: var(--danger); border-color: var(--danger); }
+
+.path-node[data-node],
+.path-rel[data-edge] { cursor: pointer; }
+.path-node[data-node]:hover { border-color: var(--accent); color: var(--accent); }
+.path-rel[data-edge]:hover { border-color: var(--accent); color: var(--accent); }
+
+.path-algo-note { margin-top: 4px; }
+
+.path-route {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: var(--rad-sm);
+  border: 1px solid var(--line);
+  color: var(--muted-strong);
+}
+.path-route.shortest { color: var(--accent); border-color: var(--accent); }
+.path-route.alternative { color: var(--warn); border-color: var(--warn); }

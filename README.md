@@ -93,7 +93,7 @@ OmenHound is a Go implementation of the BloodHound CE model:
 | **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and over **SMB/RPC** (`-c session`/`localadmin`/`rdp`/`dcom`/`psremote`/`loggedon` → `HasSession`/`AdminTo`/`CanRDP`/`ExecuteDCOM`/`CanPSRemote`), emitting a graph. Simple bind, NTLM and pass-the-hash (LDAPS recommended); BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
-| **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. Ingest can **merge** (default) or **replace** the current graph, and the UI can **delete** all data so you work with one dataset at a time. |
+| **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. Ingest can be **merge** (default) or **replace**, can be **scoped to one domain** (rejecting foreign domains rather than mixing them), and is tracked as **batches**. The UI previews an import, lists batch/domain history, and offers **scoped deletion** by batch or domain with a preview-and-confirm workflow, plus a global delete so you can work with one dataset at a time. |
 | **Dynamic abuse engine** | For every edge, renders a copy-pasteable abuse command by interpolating **real node properties**, with a per-technique **OPSEC/detection note** and Windows event IDs. |
 | **Attack-path analytics** | Fourteen canned, documented queries (Kerberoastable, AS-REP roastable, DCSync, LAPS, delegation, AdminTo, high-value, adminCount, owned…) answered over the current graph at `/api/v1/analytics`, with an **Attack Paths** view in the UI. Each result lists the exact property/relationship that matched, and a zero result says so when the underlying attribute was never collected. |
 | **Gated credential ops** | Optional, off-by-default ability to change an AD password over LDAPS (`unicodePwd`), behind token + explicit-approval + audit gates. |
@@ -154,12 +154,21 @@ curl -sS -X POST http://127.0.0.1:8080/api/v1/ingest \
   --data-binary @corp.json
 ```
 
-By default an ingest **merges** into whatever the server already holds. To end up with
-**only** this collection, use replace mode; to wipe the graph entirely, delete it. Both are
-also available in the web UI's **Ingestion** page (a *Replace existing graph* checkbox and a
-*Delete data* control), including the same confirmation steps.
+By default an ingest **merges** into whatever the server already holds. An ingest can be
+**scoped to one domain** (`?domain=corp.local`) so a multi-domain file cannot silently
+mix domains: objects that declare a *different* domain are rejected (or skipped, with
+`on_mismatch=skip`), and objects with no domain are only assigned to the selected domain
+when you explicitly ask (`unknown=stamp`). To end up with **only** this collection, use
+replace mode — with a domain it replaces just that domain. The web UI's **Ingestion** page
+exposes the same scope box, a dry-run **Preview**, a *Replace existing graph* checkbox and
+a *Delete data* control, all with the same confirmation steps.
 
 ```bash
+# merge, but only the corp.local objects (reject anything else)
+curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?domain=corp.local&on_mismatch=reject" \
+  -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
+  --data-binary @corp.json
+
 # replace: delete everything, then ingest this graph
 curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?mode=replace" \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
@@ -169,6 +178,16 @@ curl -sS -X POST "http://127.0.0.1:8080/api/v1/ingest?mode=replace" \
 curl -sS -X DELETE "http://127.0.0.1:8080/api/v1/graph?confirm=true" \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN"
 ```
+
+Imports are tracked as **ingestion batches** (id, source file, selected domain, timestamp,
+status, created/updated/skipped counts). The web UI's **Ingestion Management** tab lists
+that history, and offers **scoped deletion** by batch or by domain: it previews exactly
+which nodes and relationships would be removed and which are **preserved** because another
+import shares them, then deletes only after you confirm (a domain deletion requires typing
+the domain name). The server re-validates the preview when you confirm, so a stale plan
+can never delete more than you reviewed. Scoped deletion needs a store that tracks
+provenance — the default in-memory store does; a backend without it returns a clear error
+rather than deleting blindly.
 
 ### Serve with Neo4j
 
@@ -193,7 +212,7 @@ by purpose:
 | Search | find node (name / SAM / SID) |
 | Filtering | node-kind filter, relationship filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
 | Display | node labels, edge labels, directional arrows, legend |
-| Analysis | open **Path Explorer** from the starting node |
+| Analysis | **Find Paths** between the start and target, open **Path Explorer** from the starting node, toggle the route panel |
 
 Three entity roles are kept deliberately separate and are never inferred from
 one another:
@@ -206,8 +225,9 @@ one another:
 
 **Starting node.** Type in *Start from…* to search every object; picking a result
 sets the starting node, selects and centres it, and shows a `start` chip. The
-canvas marks it with a double ring and an **S** badge (the target gets a dashed
-ring and a **T** badge) — shape and letter, so the meaning survives greyscale.
+canvas marks it with a solid **green** double ring and a `START` caption; the
+target gets a dashed **red** ring and a `TARGET` caption. Shape, letter and
+caption are all present, so the meaning survives greyscale.
 
 **Sessions.** Where the dataset contains `HasSession` edges
 (`(User)-[:HasSession]->(Computer)`), the Inspector’s *Sessions* section lists the
@@ -232,12 +252,29 @@ cred.observed_at RFC3339 collection timestamp
 cred.status      discovered | imported | validated | expired | unknown
 ```
 
-**Path Explorer.** Source and target can be set from the graph (the *⇄ Paths*
-button uses the starting node, or the selection). Results honour direction
-(outgoing / incoming / undirected) and node/relationship-type filters, and any
-path can be pushed back onto the canvas with **⌖ Show on graph**, which highlights
-its nodes and edges until cleared. Paths are graph evidence: a connection is
-never presented as an exploitable attack path.
+**Path Explorer.** Source and target can be set from the graph — **Find Paths**
+runs the search between the start and target, the *⇄ Paths* button opens the
+view from the starting node or the selection — and the **Path Explorer** panel
+appears beside the canvas (a collapsed/hidden drawer takes no space from the
+graph). Results honour direction (outgoing / incoming / undirected), node and
+relationship-type filters, max depth and max paths.
+
+The backend runs a breadth-first search that returns up to *max paths* **distinct
+shortest routes of equal length**, not every possible route; when the max-paths
+or expansion limit is hit the UI says so instead of implying a complete set. With
+no route selected every discovered route is highlighted in its own colour;
+selecting a route focuses it, emphasises its nodes with a coloured ring
+(intermediate nodes keep their category fill) and dims the other routes without
+deleting anything. Unrelated nodes and edges are faded, never removed.
+
+The panel lists, per route: *Path N*, start/target name and type, hop and node
+counts, the intermediate nodes in traversal order, the relationship types, and a
+status — **complete** (every relationship has an abuse template) or **audit
+unknown** (a relationship has no template) — which describes data coverage, never
+exploitability. Controls are **Show all**, **Focus**, **↑ Prev** / **↓ Next**,
+**⛶ Fit**, **⇄ Reverse** (swap start and target and re-search), **⭳ Export**
+(download the selected route as JSON) and **Clear**. Paths are graph evidence: a
+connection is never presented as an exploitable attack path.
 
 Keyboard (ignored while typing): `f` fit, `r` reset, `c` centre selection,
 `/` focus the node search, `Esc` clear the selection and any highlighted path.
@@ -432,6 +469,19 @@ domain or a database.
       `GET /api/v1/analytics` and shown in the **Attack Paths** UI view
       *(unit-tested; queries key off BloodHound CE property/edge names and flag when
       the data they need was never collected)*
+- [x] Start→Target path highlighting in the Graph Explorer: multi-route shortest-path
+      search, a collapsible **Path Explorer** panel, per-route colouring, green START /
+      red TARGET markers, reverse search and JSON export
+      *(pathfinder and highlight state unit-tested; the UI is driven end-to-end in a real
+      browser — the Neo4j path backend is code-only, no live database in CI)*
+- [x] Domain-scoped ingestion and ingestion management: imports can be constrained to one
+      domain (foreign-domain objects refused, never mixed), are tracked as **batches**, and
+      can be **deleted by batch or domain** with a preview-and-confirm workflow that
+      preserves records other imports share
+      *(provenance, scoping and deletion unit-tested; the UI is driven end-to-end in a real
+      browser — scoped deletion needs a provenance-tracking store, so it is unavailable on
+      the Neo4j backend, which returns a clear error instead of deleting blindly)*
+- [ ] Provenance-aware scoped deletion on the Neo4j backend (batch/domain tags + migration)
 - [ ] Incremental collection with SID-keyed merge and stale-edge expiry
 - [ ] Customized BloodHound CE frontend (BloodHound CE is written in Go; stock CE UI as fallback)
 

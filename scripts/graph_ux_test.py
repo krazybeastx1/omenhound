@@ -83,6 +83,11 @@ DCSYNC = "S-1-5-21-9-5004"
 OWNED = "S-1-5-21-9-5005"
 HVTARGET = "S-1-5-21-9-5006"
 LAPSREADER = "S-1-5-21-9-5007"
+# Diamond fixture: two equal-length routes from DIAMOND_START to DIAMOND_TARGET.
+DIA_S = "S-1-5-21-9-6001"
+DIA_A = "S-1-5-21-9-6002"
+DIA_B = "S-1-5-21-9-6003"
+DIA_T = "S-1-5-21-9-6004"
 
 FIXTURE = {
     "nodes": [
@@ -113,6 +118,10 @@ FIXTURE = {
          "props": {"highvalue": "true"}},
         {"id": LAPSREADER, "kind": "User", "name": "LAPSREADER", "domain": "uxlab.test",
          "props": {"enabled": "true"}},
+        {"id": DIA_S, "kind": "User", "name": "DIAMONDSTART", "domain": "uxlab.test"},
+        {"id": DIA_A, "kind": "Group", "name": "DIAMONDA", "domain": "uxlab.test"},
+        {"id": DIA_B, "kind": "Group", "name": "DIAMONDB", "domain": "uxlab.test"},
+        {"id": DIA_T, "kind": "Domain", "name": "DIAMONDTARGET", "domain": "uxlab.test"},
     ],
     "edges": [
         {"source": USER, "target": GROUP, "kind": "MemberOf"},
@@ -121,6 +130,10 @@ FIXTURE = {
         {"source": USER2, "target": HOST, "kind": "HasSession"},
         {"source": DCSYNC, "target": DOMAIN, "kind": "GetChangesAll"},
         {"source": LAPSREADER, "target": HOST, "kind": "ReadLAPSPassword"},
+        {"source": DIA_S, "target": DIA_A, "kind": "MemberOf"},
+        {"source": DIA_S, "target": DIA_B, "kind": "GenericWrite"},
+        {"source": DIA_A, "target": DIA_T, "kind": "GenericWrite"},
+        {"source": DIA_B, "target": DIA_T, "kind": "GenericAll"},
     ],
     "meta": {"collector": "ux-fixture", "domain": "uxlab.test"},
 }
@@ -131,6 +144,42 @@ MINI = {
     "nodes": [{"id": "UX-MINI-1", "kind": "User", "name": "MINIONLY", "domain": "uxlab.test"}],
     "edges": [],
     "meta": {"collector": "ux-mini", "domain": "uxlab.test"},
+}
+
+# Second-domain fixture used to prove domain-scoped ingestion, alternative path
+# discovery and scoped deletion. It carries a 2-hop and a 3-hop route so a
+# "shortest only" search and a "shortest + alternatives" search differ.
+ALT_S = "S-1-5-21-9-7001"
+ALT_M = "S-1-5-21-9-7002"
+ALT_T = "S-1-5-21-9-7003"
+ALT_X = "S-1-5-21-9-7004"
+ALT_Y = "S-1-5-21-9-7005"
+ALT_Z = "S-1-5-21-9-7006"
+
+ALT = {
+    "nodes": [
+        {"id": ALT_S, "kind": "User", "name": "ALTSRC", "domain": "alt.test"},
+        {"id": ALT_M, "kind": "Group", "name": "ALTMID", "domain": "alt.test"},
+        {"id": ALT_T, "kind": "Domain", "name": "ALTTGT", "domain": "alt.test"},
+        {"id": ALT_X, "kind": "Group", "name": "ALTX", "domain": "alt.test"},
+        {"id": ALT_Y, "kind": "OU", "name": "ALTY", "domain": "alt.test"},
+    ],
+    "edges": [
+        {"source": ALT_S, "target": ALT_M, "kind": "MemberOf"},
+        {"source": ALT_M, "target": ALT_T, "kind": "GenericWrite"},
+        {"source": ALT_S, "target": ALT_X, "kind": "MemberOf"},
+        {"source": ALT_X, "target": ALT_Y, "kind": "GenericWrite"},
+        {"source": ALT_Y, "target": ALT_T, "kind": "GenericWrite"},
+    ],
+    "meta": {"collector": "ux-alt", "domain": "alt.test"},
+}
+
+# A single extra node in alt.test; ingesting it after a deletion preview makes
+# that preview's fingerprint stale, which the server must detect.
+ALT_EXTRA = {
+    "nodes": [{"id": ALT_Z, "kind": "Computer", "name": "ALTZ", "domain": "alt.test"}],
+    "edges": [],
+    "meta": {"collector": "ux-alt", "domain": "alt.test"},
 }
 
 
@@ -481,6 +530,109 @@ def main():
             js(d, "clearPathHighlight(); location.hash='#/graph';")
             WebDriverWait(d, 10).until(lambda x: "view-graph" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
 
+        # ---- 11d. multi-path discovery + Path Explorer drawer --------
+        if has_fixture:
+            st, dia = http_post(base, "/api/v1/paths/shortest",
+                                {"source_id": DIA_S, "target_id": DIA_T, "direction": "outgoing",
+                                 "max_depth": 5, "max_paths": 10}, token=args.token)
+            dia_paths = dia.get("paths") or []
+            check("multi-path search returns equal-length alternatives",
+                  st == 200 and len(dia_paths) == 2 and all(len(p["relationships"]) == 2 for p in dia_paths),
+                  {"status": st, "paths": len(dia_paths)})
+
+            js(d, "location.hash='#/graph';")
+            WebDriverWait(d, 10).until(lambda x: "view-graph" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
+            js(d, "setStartNode('%s', {focus:false}); setTargetNode('%s');" % (DIA_S, DIA_T))
+            WebDriverWait(d, 10).until(lambda x: js(x, "return !document.getElementById('findPathsRun').disabled"))
+            js(d, "document.getElementById('findPathsRun').click();")
+            WebDriverWait(d, 20).until(lambda x: js(x, "return pathState && pathState.status==='ready' && pathState.paths.length===2"))
+            drawer = js(d, """return {visible:!document.getElementById('pathDrawer').hidden,
+                items:document.querySelectorAll('#pathDrawerResults .path-item').length,
+                toggle:!document.getElementById('togglePathDrawer').hidden,
+                sel:pathState.selected,
+                nodes:pathHighlight.nodes.size, edges:pathHighlight.edges.size,
+                start:pathRoleOf('%s'), target:pathRoleOf('%s'),
+                mid:pathRoleOf('%s')};""" % (DIA_S, DIA_T, DIA_A))
+            check("Find Paths populates the Path Explorer drawer and highlights every route",
+                  drawer["visible"] and drawer["items"] == 2 and drawer["toggle"] and drawer["sel"] == -1
+                  and drawer["edges"] == 4 and drawer["nodes"] == 4, drawer)
+            check("start, target and intermediate nodes carry distinct roles",
+                  drawer["start"] == "start" and drawer["target"] == "target" and drawer["mid"] == "intermediate", drawer)
+
+            sub = js(d, """return {unrelatedOnPath:inPathNodes('%s'), unrelatedLoaded:byId.has('%s'),
+                pathNodeOnPath:inPathNodes('%s')};""" % (HVTARGET, HVTARGET, DIA_A))
+            check("unrelated nodes are subdued, not removed from the graph",
+                  sub["unrelatedOnPath"] is False and sub["unrelatedLoaded"] is True and sub["pathNodeOnPath"] is True, sub)
+
+            focused = js(d, """document.querySelectorAll('#pathDrawerResults .path-item')[1].click();
+                return {sel:pathState.selected, routes:pathHighlight.paths.length,
+                        hasOthers:pathHighlight.paths.some((p,i)=>i!==pathState.selected)};""")
+            check("selecting a route in the drawer focuses it", focused["sel"] == 1 and focused["hasOthers"] is True, focused)
+
+            cyc = js(d, """document.getElementById('pathNext').click(); const a=pathState.selected;
+                document.getElementById('pathPrev').click(); const b=pathState.selected; return {a:a,b:b};""")
+            check("Next / Previous cycle between routes", cyc["a"] == 0 and cyc["b"] == 1, cyc)
+
+            allp = js(d, """document.getElementById('pathShowAll').click();
+                return {sel:pathState.selected, edges:pathHighlight.edges.size};""")
+            check("Show all restores the whole-route highlight", allp["sel"] == -1 and allp["edges"] == 4, allp)
+
+            exp = js(d, "focusPath(0, {}); return exportPathJSON(0);")
+            try:
+                ej = json.loads(exp)
+            except Exception:
+                ej = None
+            check("a route exports as JSON with its nodes and steps",
+                  ej is not None and ej["path"]["length"] == 2 and len(ej["path"]["nodes"]) == 3 and
+                  len(ej["path"]["steps"]) == 2, {"exported": exp[:60] if exp else None})
+
+            fitres = js(d, "document.getElementById('pathFit').click(); return {sel:pathState.selected, k:view.k>0};")
+            check("Fit to path keeps the selection without error", fitres["sel"] == 0 and fitres["k"] is True, fitres)
+
+            # Inspect from the drawer: an intermediate node chip selects the real
+            # node, a relationship chip opens the real edge inspector.
+            js(d, "focusPath(0, {});")
+            insp = js(d, """const chip=document.querySelector('#pathDrawerResults .path-node[data-node]');
+                if(!chip) return {chip:false};
+                const id=chip.dataset.node; chip.click();
+                return {chip:true, id:id, sel:selectedNode?selectedNode.id:null,
+                        view:(document.querySelector('.view.active')||{}).id};""")
+            check("clicking an intermediate node in the Path Explorer inspects it",
+                  insp["chip"] and insp["sel"] == insp["id"] and insp["view"] == "view-graph", insp)
+
+            js(d, "focusPath(0, {});")
+            insr = js(d, """const chip=document.querySelector('#pathDrawerResults .path-rel[data-rel]');
+                if(!chip) return {chip:false};
+                chip.click();
+                return {chip:true, edge:selectedEdge?selectedEdge.kind:null};""")
+            check("clicking a relationship chip in the Path Explorer inspects the edge",
+                  insr["chip"] and insr["edge"] is not None, insr)
+
+            # A superseded search must not overwrite the newer one's result.
+            js(d, """runPathSearch('%s','%s'); runPathSearch('%s','%s');""" % (DIA_S, DIA_T, USER, GROUP))
+            WebDriverWait(d, 20).until(lambda x: js(x, "return pathState.status!=='loading'"))
+            time.sleep(0.5)
+            stale = js(d, "return {src:pathState.sourceId, dst:pathState.targetId}")
+            check("a superseded path search cannot overwrite the newer one",
+                  stale["src"] == USER and stale["dst"] == GROUP, stale)
+
+            # Reverse swaps the endpoints; a one-way pair yields an honest empty state.
+            js(d, "setStartNode('%s', {focus:false}); setTargetNode('%s'); runPathSearch('%s','%s');" % (USER, GROUP, USER, GROUP))
+            WebDriverWait(d, 20).until(lambda x: js(x, "return pathState.status==='ready'"))
+            js(d, "document.getElementById('pathReverse').click();")
+            WebDriverWait(d, 20).until(lambda x: js(x, "return pathState.sourceId==='%s' && pathState.status!=='loading'" % GROUP))
+            rev = js(d, """return {src:pathState.sourceId, dst:pathState.targetId, status:pathState.status,
+                text:document.getElementById('pathDrawerResults').textContent};""")
+            check("Reverse swaps the endpoints; a one-way pair reports an honest empty state",
+                  rev["src"] == GROUP and rev["dst"] == USER and rev["status"] == "empty" and "No paths found" in rev["text"], rev)
+
+            clr = js(d, """document.getElementById('pathDrawerClear').click();
+                return {hidden:document.getElementById('pathDrawer').hidden, path:pathHighlight,
+                        items:document.querySelectorAll('#pathDrawerResults .path-item').length};""")
+            check("Clear restores the graph and empties the Path Explorer",
+                  clr["hidden"] is True and clr["path"] is None and clr["items"] == 0, clr)
+            js(d, "location.hash='#/graph';")
+
         # ---- 11c. Attack Paths view (canned analytics) ---------------
         d.execute_script("arguments[0].click();", d.find_element(By.CSS_SELECTOR, '.nav-btn[data-view="attacks"]'))
         WebDriverWait(d, 15).until(lambda x: "view-attacks" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
@@ -528,6 +680,134 @@ def main():
         WebDriverWait(d, 10).until(lambda x: "view-graph" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
         check("navigation and ingestion views still work",
               js(d, "return nodes.length") == len(present["nodes"]))
+
+        # ---- 13b. domain-scoped ingestion + ingestion management ----------
+        if args.token and has_fixture:
+            # A scoped ingest attributes the file to the selected domain and is
+            # recorded as one batch, keeping it separate from the other domain.
+            st, ar = http_post(base, "/api/v1/ingest?domain=alt.test", ALT, token=args.token)
+            check("ingest scoped to a domain records a batch for that domain",
+                  st == 200 and (ar.get("batch") or {}).get("domain") == "alt.test"
+                  and (ar.get("batch") or {}).get("id"), {"status": st, "batch": ar.get("batch")})
+
+            # A file whose objects belong to another domain is refused, never
+            # silently reassigned to the selected domain.
+            st_bad, bad = http_post(base, "/api/v1/ingest?domain=alt.test", MINI, token=args.token)
+            check("scoped ingest refuses objects that belong to another domain",
+                  st_bad == 400 and "domain" in json.dumps(bad).lower(), {"status": st_bad, "body": bad})
+
+            # The dry-run preview reports what would be written and writes nothing.
+            st, pv = http_post(base, "/api/v1/ingest/preview?domain=alt.test", ALT, token=args.token)
+            p = pv.get("preview") or {}
+            check("ingest preview reports counts without writing",
+                  st == 200 and p.get("nodes") == len(ALT["nodes"])
+                  and p.get("assigned_nodes") == len(ALT["nodes"]) and p.get("mismatch_nodes") == 0, pv)
+
+            # Domain + batch history reflect the scoped import.
+            st, doms = http_get(base, "/api/v1/ingest/domains")
+            names = {x.get("domain") for x in (doms.get("domains") or [])}
+            check("management domain list includes both domains",
+                  st == 200 and "alt.test" in names and "uxlab.test" in names, {"domains": sorted(names)})
+            st, batches = http_get(base, "/api/v1/ingest/batches")
+            check("management batch history lists the scoped batch",
+                  st == 200 and any(b.get("domain") == "alt.test" for b in (batches.get("batches") or [])),
+                  {"count": len(batches.get("batches") or [])})
+
+            # Alternative route discovery: shortest-only returns the 2-hop route,
+            # while alternative mode also returns the longer, simple 3-hop route.
+            st_s, short = http_post(base, "/api/v1/paths/shortest",
+                                    {"source_id": ALT_S, "target_id": ALT_T, "direction": "outgoing",
+                                     "max_depth": 5, "max_paths": 10}, token=args.token)
+            st_a, alts = http_post(base, "/api/v1/paths/shortest",
+                                   {"source_id": ALT_S, "target_id": ALT_T, "direction": "outgoing",
+                                    "max_depth": 5, "max_paths": 10, "alternative": True}, token=args.token)
+            sp = short.get("paths") or []
+            ap = alts.get("paths") or []
+            check("shortest-only search returns just the minimum-hop route",
+                  st_s == 200 and len(sp) == 1 and len(sp[0]["relationships"]) == 2, short)
+            check("alternative mode also returns the longer simple route",
+                  st_a == 200 and sorted(len(p2["relationships"]) for p2 in ap) == [2, 3], alts)
+
+            # A domain filter excludes routes whose nodes belong to another domain.
+            st, domp = http_post(base, "/api/v1/paths/shortest",
+                                 {"source_id": ALT_S, "target_id": ALT_T, "direction": "outgoing",
+                                  "max_depth": 5, "max_paths": 10, "include_domains": ["uxlab.test"]},
+                                 token=args.token)
+            check("domain filter excludes routes outside the selected domain",
+                  st == 200 and len(domp.get("paths") or []) == 0, domp)
+
+            # UI: the management tab lists batches and domains, renders a deletion
+            # preview and requires the domain name to be typed to confirm.
+            js(d, "document.getElementById('ingestToken').value=arguments[0];", args.token)
+            d.execute_script("arguments[0].click();", d.find_element(By.CSS_SELECTOR, '.nav-btn[data-view="ingestion"]'))
+            WebDriverWait(d, 10).until(lambda x: "view-ingestion" in js(x, "return (document.querySelector('.view.active')||{}).id||''"))
+            js(d, "document.querySelector('.ingestion-tabs .tab-btn[data-tab=\"mgmt\"]').click();")
+            WebDriverWait(d, 15).until(lambda x: js(x, "return document.querySelectorAll('#batchRows .batch-del').length>0"))
+            mgmt = js(d, """return {tab:!document.getElementById('tab-mgmt').hidden,
+                batches:document.querySelectorAll('#batchRows .batch-del').length,
+                domains:[...document.querySelectorAll('#domainRows .domain-del')].map(b=>b.dataset.domain)};""")
+            check("ingestion management tab lists batches and domains",
+                  mgmt["tab"] and mgmt["batches"] >= 1 and "alt.test" in mgmt["domains"], mgmt)
+
+            js(d, "document.querySelector('#batchRows .batch-del').click();")
+            WebDriverWait(d, 15).until(lambda x: js(x, "return !document.getElementById('delConfirmArea').hidden"))
+            prv = js(d, """return {preview:/Deletion preview/.test(document.getElementById('delPreview').textContent),
+                nameShown:!document.getElementById('delNameWrap').hidden,
+                counts:document.querySelectorAll('#delPreview .count-cell').length};""")
+            check("batch deletion preview renders counts and no name prompt",
+                  prv["preview"] and prv["counts"] >= 4 and prv["nameShown"] is False, prv)
+            js(d, "document.getElementById('delCancel').click();")
+            check("cancelling a deletion preview clears it without deleting",
+                  js(d, "return document.getElementById('delPreview').hidden && document.getElementById('delConfirmArea').hidden"))
+
+            # Selected-record deletion preview through the UI (scoped to a domain).
+            js(d, """document.getElementById('recScope').value='domain';
+                document.getElementById('recTarget').value='alt.test';
+                document.getElementById('recNodes').value='%s';""" % ALT_S)
+            js(d, "document.getElementById('recPreviewBtn').click();")
+            WebDriverWait(d, 15).until(lambda x: js(x, "return !document.getElementById('delConfirmArea').hidden"))
+            recp = js(d, """return {preview:/Deletion preview/.test(document.getElementById('delPreview').textContent),
+                nameShown:!document.getElementById('delNameWrap').hidden};""")
+            check("selected-record deletion preview renders inside a domain scope",
+                  recp["preview"] and recp["nameShown"] is False, recp)
+            js(d, "document.getElementById('delCancel').click();")
+
+            js(d, "document.querySelector('#domainRows .domain-del[data-domain=\"alt.test\"]').click();")
+            WebDriverWait(d, 15).until(lambda x: js(x, "return !document.getElementById('delConfirmArea').hidden"))
+            dpr = js(d, """return {nameShown:!document.getElementById('delNameWrap').hidden,
+                disabled:document.getElementById('delConfirm').disabled,
+                text:document.getElementById('delPreview').textContent};""")
+            check("domain deletion preview requires typing the domain name",
+                  dpr["nameShown"] and dpr["disabled"] is True and "alt.test" in dpr["text"], dpr)
+            js(d, "document.getElementById('delCancel').click();")
+            # Return to the upload tab so the file-picker tests can interact.
+            js(d, "document.querySelector('.ingestion-tabs .tab-btn[data-tab=\"web\"]').click();")
+
+            # Scoped deletion: preview, reject a stale preview, then delete for real.
+            st, dp1 = http_post(base, "/api/v1/ingest/domains/alt.test/delete-preview", None, token=args.token)
+            check("domain deletion preview reports the plan and a revalidation token",
+                  st == 200 and dp1.get("delete_nodes") == len(ALT["nodes"]) and dp1.get("token"), dp1)
+
+            http_post(base, "/api/v1/ingest?domain=alt.test", ALT_EXTRA, token=args.token)
+            st_stale, _ = http_delete(
+                base, "/api/v1/ingest/domains/alt.test?confirm=true&token=" + str(dp1.get("token")), token=args.token)
+            check("a stale deletion preview is rejected instead of deleting", st_stale == 409, {"status": st_stale})
+
+            st, dp2 = http_post(base, "/api/v1/ingest/domains/alt.test/delete-preview", None, token=args.token)
+            st_del, dres = http_delete(
+                base, "/api/v1/ingest/domains/alt.test?confirm=true&token=" + str(dp2.get("token")), token=args.token)
+            check("domain deletion removes only the selected domain's data",
+                  st_del == 200 and dres.get("deleted_nodes") == len(ALT["nodes"]) + 1, dres)
+            st, g2 = http_get(base, "/api/v1/graph")
+            ids2 = {n["id"] for n in g2["nodes"]}
+            check("the other domain survives a scoped deletion",
+                  ALT_S not in ids2 and ALT_Z not in ids2 and USER in ids2 and len(ids2) == len(present["nodes"]),
+                  {"alt_left": sorted(ids2 & {ALT_S, ALT_M, ALT_T, ALT_X, ALT_Y, ALT_Z}), "total": len(ids2)})
+            st_noauth, _ = http_post(base, "/api/v1/ingest/domains/uxlab.test/delete-preview", None, token=None)
+            check("ingestion-management endpoints require the write token",
+                  st_noauth in (401, 403), {"status": st_noauth})
+        else:
+            skip("domain-scoped ingestion + management", "no --token or fixture")
 
         # ---- 14/15. data management: replace-mode ingest + delete ----------
         if args.token:

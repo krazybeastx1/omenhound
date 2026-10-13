@@ -673,6 +673,28 @@ function drawMarkerBadge(c, x, y, r, letter, color) {
   c.restore();
 }
 
+// A small outlined pill used for the unmistakable START / TARGET captions. The
+// letter badge above carries the same meaning for a greyscale view.
+function drawMarkerPill(c, cx, cy, text, color) {
+  c.save();
+  c.font = "bold 9px ui-sans-serif,system-ui,sans-serif";
+  const w = c.measureText(text).width + 12;
+  const h = 13;
+  const x = cx - w / 2, y = cy - h / 2;
+  c.beginPath();
+  if (c.roundRect) c.roundRect(x, y, w, h, 6); else c.rect(x, y, w, h);
+  c.fillStyle = "rgba(11,14,20,0.92)";
+  c.fill();
+  c.lineWidth = 1.4;
+  c.strokeStyle = color;
+  c.stroke();
+  c.fillStyle = color;
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillText(text, cx, cy + 0.5);
+  c.restore();
+}
+
 function draw() {
   if (!canvas || !ctx || !canvas.parentElement) return;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -713,15 +735,21 @@ function draw() {
     const isSel = selectedEdge === e;
     const isHover = hoverEdge === e;
     const incident = !!selectedNode && (e.source === selectedNode.id || e.target === selectedNode.id);
-    const onPath = inPathEdges(e);
+    const pinfo = pathEdgeInfo(e);
+    const onPath = !!pinfo;
     const highlighted = isSel || isHover || incident || onPath || (focus && focus.has(e.source) && focus.has(e.target));
-    let dimmed = (focus && !highlighted) || (hideUnrelatedEdges && !incident && !isSel);
-    // While a path is highlighted, fade everything off the path.
-    if (pathHighlight && !onPath) dimmed = true;
+    const dimmed = (focus && !highlighted) || (hideUnrelatedEdges && !incident && !isSel);
 
-    ctx.strokeStyle = isSel ? "#ffffff" : onPath ? "#ffd600" : edgeColor(e.kind);
-    ctx.lineWidth = onPath ? 3.4 : isSel ? 2.6 : isHover ? 2.2 : incident ? 1.8 : 1.1;
-    ctx.globalAlpha = dimmed ? 0.05 : (isSel || isHover || incident || onPath) ? 0.95 : 0.42;
+    // Path edges always win the colour decision; everything off a highlighted
+    // path fades right down but is never removed from the dataset.
+    let alpha;
+    if (onPath) alpha = pinfo.alpha;
+    else if (pathHighlight) alpha = 0.05;
+    else alpha = dimmed ? 0.05 : (isSel || isHover || incident) ? 0.95 : 0.42;
+
+    ctx.strokeStyle = isSel ? "#ffffff" : onPath ? pinfo.color : edgeColor(e.kind);
+    ctx.lineWidth = onPath ? pinfo.width : isSel ? 2.6 : isHover ? 2.2 : incident ? 1.8 : 1.1;
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.moveTo(ax, ay);
     ctx.lineTo(bx, by);
@@ -772,6 +800,17 @@ function draw() {
     ctx.fillStyle = COLORS[node.kind] || "#888";
     ctx.fill();
 
+    // Path ring: keep the category fill, add an outer ring so every intermediate
+    // node on a discovered route is unmistakable.
+    if (onPath) {
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = pathNodeColor(node.id) || "#ffd600";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     if (isSel || isHover || isMatch) {
       ctx.lineWidth = isSel ? 3 : 2;
       ctx.strokeStyle = isSel ? "#ffffff" : isMatch ? "#ffd600" : "#cbd5e1";
@@ -786,24 +825,26 @@ function draw() {
       ctx.stroke();
     }
 
-    // Starting / target markers use a distinct SHAPE and a letter label, so the
-    // meaning never depends on colour alone (accessible in greyscale too).
+    // Starting / target markers use a distinct SHAPE, a letter label and a text
+    // caption, so the meaning never depends on colour alone.
     if (node.id === startNodeId) {
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = "#00d4ff";
+      ctx.strokeStyle = "#22c55e";
       ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.arc(p.x, p.y, r + 8, 0, Math.PI * 2); ctx.stroke();
-      drawMarkerBadge(ctx, p.x, p.y, r, "S", "#00d4ff");
+      drawMarkerBadge(ctx, p.x, p.y, r, "S", "#22c55e");
+      drawMarkerPill(ctx, p.x, p.y + r + 13, "START", "#22c55e");
     }
     if (node.id === targetNodeId) {
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = "#ff8c42";
+      ctx.strokeStyle = "#ff5c3a";
       ctx.lineWidth = 2.5;
       ctx.setLineDash([4, 3]);
       ctx.beginPath(); ctx.arc(p.x, p.y, r + 6, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
-      drawMarkerBadge(ctx, p.x, p.y, r, "T", "#ff8c42");
+      drawMarkerBadge(ctx, p.x, p.y, r, "T", "#ff5c3a");
+      drawMarkerPill(ctx, p.x, p.y + r + 13, "TARGET", "#ff5c3a");
     }
     ctx.globalAlpha = 1;
   }
@@ -1184,6 +1225,46 @@ function targetNode() { return targetNodeId ? byId.get(targetNodeId) || null : n
 function inPathNodes(id) { return !!(pathHighlight && pathHighlight.nodes.has(id)); }
 function inPathEdges(e) { return !!(pathHighlight && pathHighlight.edges.has(edgeKey(e))); }
 
+// Colour/opacity for an edge that belongs to a highlighted path. When a single
+// route is focused it is emphasised and the other discovered routes stay
+// visible but subdued; with no focus, each route keeps its own colour.
+function pathEdgeInfo(e) {
+  if (!pathHighlight) return null;
+  const key = edgeKey(e);
+  if (!pathHighlight.edges.has(key)) return null;
+  const paths = pathHighlight.paths || [];
+  const members = [];
+  for (let i = 0; i < paths.length; i++) if (paths[i].edges.has(key)) members.push(i);
+  if (pathHighlight.selected >= 0) {
+    if (members.indexOf(pathHighlight.selected) !== -1) {
+      return { color: paths[pathHighlight.selected].color, width: 3.6, alpha: 0.98, secondary: false };
+    }
+    return { color: "#94a3b8", width: 2.2, alpha: 0.45, secondary: true };
+  }
+  const i = members.length ? members[0] : 0;
+  return { color: paths[i] ? paths[i].color : "#ffd600", width: 3.4, alpha: 0.95, secondary: false };
+}
+
+// Ring colour for a node on a highlighted path (the category fill is kept).
+function pathNodeColor(id) {
+  if (!pathHighlight) return null;
+  const paths = pathHighlight.paths || [];
+  if (pathHighlight.selected >= 0 && paths[pathHighlight.selected] && paths[pathHighlight.selected].nodes.has(id)) {
+    return paths[pathHighlight.selected].color;
+  }
+  for (const p of paths) if (p.nodes.has(id)) return p.color;
+  return "#ffd600";
+}
+
+// The role a node plays in the current analysis, exposed for callers and tests.
+function pathRoleOf(id) {
+  if (id === startNodeId && id === targetNodeId) return "start+target";
+  if (id === startNodeId) return "start";
+  if (id === targetNodeId) return "target";
+  if (pathHighlight && pathHighlight.nodes.has(id)) return "intermediate";
+  return null;
+}
+
 // Set the analysis origin. This is intentionally separate from `selectedNode`:
 // the origin persists as the operator inspects other entities.
 function setStartNode(id, opts = {}) {
@@ -1239,27 +1320,45 @@ function updateStartUI() {
   if (hint) hint.textContent = s ? `Starting node: ${nodeLabel(s)} — use “⇄ Paths” to analyse from here.` : "Tip: choose a “Start from…” entity to anchor path analysis.";
   const clearBtn = document.getElementById("clearPathHighlight");
   if (clearBtn) clearBtn.hidden = !pathHighlight;
+  const runBtn = document.getElementById("findPathsRun");
+  if (runBtn) runBtn.disabled = !(startNodeId && targetNodeId);
+  const drawerToggle = document.getElementById("togglePathDrawer");
+  if (drawerToggle) {
+    drawerToggle.hidden = !pathState.visible && pathState.paths.length === 0;
+    drawerToggle.setAttribute("aria-pressed", pathState.visible ? "true" : "false");
+  }
 }
 
 // Highlight a Path-Explorer result on the graph, then switch to the graph view.
+// A one-off path (e.g. from the Inspector) becomes the whole result set.
 function highlightPath(p) {
   if (!p) return;
-  const nodeIds = new Set((p.nodes || []).map((n) => n.id));
-  const edgeIds = new Set((p.relationships || []).map((e) => edgeKey(e)));
-  pathHighlight = { nodes: nodeIds, edges: edgeIds, length: p.length };
-  updateStartUI();
+  pathState.paths = [p];
+  pathState.status = "ready";
+  pathState.truncated = false;
+  pathState.selected = -1;
+  pathState.error = "";
+  pathState.sourceId = (p.nodes && p.nodes[0]) ? p.nodes[0].id : null;
+  pathState.targetId = (p.nodes && p.nodes.length) ? p.nodes[p.nodes.length - 1].id : null;
+  pathState.visible = true;
+  updatePathHighlight();
+  renderPathDrawer();
+  renderPathsViewResults();
   setView("graph");
-  applyFilters();
   // renderView fits the whole graph on a timer; fit the path just after.
-  setTimeout(() => fitToNodes(nodeIds), 40);
+  setTimeout(() => fitToPathSelection(), 40);
   toast(`Path highlighted (${p.length} hop${p.length === 1 ? "" : "s"})`, "success");
 }
 
+// Clear the graph highlight but keep the discovered routes in the panel.
 function clearPathHighlight() {
   if (!pathHighlight) return;
   pathHighlight = null;
+  pathState.selected = -1;
   updateStartUI();
   applyFilters();
+  renderPathDrawer();
+  renderPathsViewResults();
   toast("Path highlight cleared", "info");
 }
 
@@ -2250,6 +2349,9 @@ async function loadAudit() {
 // Ingestion
 // ---------------------------------------------------------------------------
 
+// pendingDelete holds the scope the operator has previewed and may confirm.
+let pendingDelete = null;
+
 function populateIngestionCommands() {
   const origin = location.origin;
   const map = {
@@ -2280,15 +2382,311 @@ async function refreshDataMgmt() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Domain-scoped ingestion & ingestion management
+// ---------------------------------------------------------------------------
+
+function setLine(el, msg, cls) {
+  if (!el) return;
+  el.textContent = msg;
+  el.className = cls || "muted";
+}
+
+function ingestScopeParams() {
+  const p = new URLSearchParams();
+  const domain = (val("ingestDomain") || "").trim();
+  if (domain) p.set("domain", domain);
+  p.set("on_mismatch", val("ingestOnMismatch") || "reject");
+  p.set("unknown", val("ingestUnknown") === "stamp" ? "stamp" : "keep");
+  const src = (val("ingestSource") || "").trim();
+  if (src) p.set("source", src);
+  return p;
+}
+
+// Populate the domain datalist used by the ingestion scope selector.
+async function refreshIngestDomains() {
+  try {
+    const j = await apiGet("/api/v1/ingest/domains");
+    const domains = (j.domains || []).map((d) => d.domain).filter(Boolean);
+    const dl = document.getElementById("ingestDomainList");
+    if (dl) dl.innerHTML = domains.map((d) => `<option value="${esc(d)}"></option>`).join("");
+  } catch (_) { /* the management endpoints may be unavailable on other backends */ }
+}
+
+function batchRowHTML(b) {
+  const when = b.created_at ? new Date(b.created_at).toLocaleString() : "";
+  return `<tr>
+    <td><strong title="${esc(b.id)}">${esc(truncate(b.id, 22))}</strong></td>
+    <td>${esc(b.source || "—")}</td>
+    <td>${esc(b.domain || "(all in file)")}</td>
+    <td>${esc(when)}</td>
+    <td>${Number(b.nodes_created) || 0}+${Number(b.nodes_updated) || 0}</td>
+    <td>${Number(b.edges_created) || 0}+${Number(b.edges_updated) || 0}</td>
+    <td><span class="status-pill ${esc(b.status || "completed")}">${esc(b.status || "completed")}</span></td>
+    <td><button type="button" class="chip-btn batch-del" data-id="${esc(b.id)}">Preview delete</button></td>
+  </tr>`;
+}
+
+async function loadBatches() {
+  const tbody = document.getElementById("batchRows");
+  if (!tbody) return;
+  try {
+    const j = await apiGet("/api/v1/ingest/batches");
+    const batches = j.batches || [];
+    tbody.innerHTML = batches.length
+      ? batches.map(batchRowHTML).join("")
+      : '<tr><td colspan="8" class="muted">No ingestion batches recorded.</td></tr>';
+    tbody.querySelectorAll(".batch-del").forEach((btn) => btn.addEventListener("click", () => previewDelete("batch", btn.dataset.id)));
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="muted">${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function loadDomainMgmt() {
+  const tbody = document.getElementById("domainRows");
+  if (!tbody) return;
+  try {
+    const j = await apiGet("/api/v1/ingest/domains");
+    const rows = j.domains || [];
+    tbody.innerHTML = rows.length
+      ? rows.map((d) => `<tr>
+          <td><strong>${esc(d.domain)}</strong></td>
+          <td>${Number(d.nodes) || 0}</td>
+          <td>${Number(d.edges) || 0}</td>
+          <td>${Number(d.batches) || 0}</td>
+          <td><button type="button" class="chip-btn domain-del" data-domain="${esc(d.domain)}">Preview delete</button></td>
+        </tr>`).join("")
+      : '<tr><td colspan="5" class="muted">No domains in the graph.</td></tr>';
+    tbody.querySelectorAll(".domain-del").forEach((btn) => btn.addEventListener("click", () => previewDelete("domain", btn.dataset.domain)));
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderDeletePreview(prev) {
+  const box = document.getElementById("delPreview");
+  const area = document.getElementById("delConfirmArea");
+  const nameWrap = document.getElementById("delNameWrap");
+  const confirmBtn = document.getElementById("delConfirm");
+  const target = pendingDelete ? pendingDelete.target : "";
+  const label = pendingDelete && pendingDelete.kind === "records"
+    ? `selected records in ${pendingDelete.body ? pendingDelete.body.scope : "batch"} scope`
+    : (pendingDelete ? pendingDelete.kind : "");
+  const cell = (n, l, cls) => `<div class="count-cell ${cls || ""}"><span class="n">${n}</span><span class="l">${esc(l)}</span></div>`;
+  const samples = (prev.sample_delete_nodes || []).map((n) => `${esc(n.name || n.id)} <span class="muted">(${esc(n.kind)})</span>`);
+  const warnings = (prev.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  box.hidden = false;
+  box.innerHTML = `<h4>Deletion preview — ${esc(label)} “${esc(target)}”</h4>
+    <div class="count-grid">
+      ${cell(prev.delete_nodes, "nodes to delete", "danger")}
+      ${cell(prev.delete_edges, "relationships to delete", "danger")}
+      ${cell(prev.preserved_nodes, "nodes preserved", "safe")}
+      ${cell(prev.preserved_edges, "relationships preserved", "safe")}
+      ${cell(prev.shared_nodes || 0, "shared nodes kept")}
+      ${cell(prev.legacy_nodes || 0, "legacy (no provenance)")}
+    </div>
+    ${samples.length ? `<div class="sample muted small">Sample of nodes to delete: ${samples.slice(0, 8).join(", ")}</div>` : ""}
+    ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
+    <p class="muted small">The server revalidates this scope when you confirm; if the graph changed since this preview, the deletion is rejected and you will be asked to preview again.</p>`;
+  area.hidden = false;
+  if (nameWrap) nameWrap.hidden = !(pendingDelete && pendingDelete.requiresName);
+  const nameInput = document.getElementById("delConfirmName");
+  if (nameInput) nameInput.value = "";
+  if (confirmBtn) confirmBtn.disabled = !!(pendingDelete && pendingDelete.requiresName);
+  if (nameInput && pendingDelete && pendingDelete.requiresName) {
+    nameInput.oninput = () => { confirmBtn.disabled = nameInput.value.trim().toLowerCase() !== target.toLowerCase(); };
+  }
+}
+
+// Build the preview/delete request for a scope. A record selection is sent as
+// JSON on the delete request too, so the server can re-validate the exact ids
+// the operator previewed.
+function deleteRequest(kind, target, token, confirm, body) {
+  const q = "?confirm=true&token=" + encodeURIComponent(token);
+  if (kind === "batch") {
+    return { url: `/api/v1/ingest/batches/${encodeURIComponent(target)}${confirm ? q : "/delete-preview"}`, method: confirm ? "DELETE" : "POST", body: null };
+  }
+  if (kind === "domain") {
+    return { url: `/api/v1/ingest/domains/${encodeURIComponent(target)}${confirm ? q : "/delete-preview"}`, method: confirm ? "DELETE" : "POST", body: null };
+  }
+  return { url: `/api/v1/ingest/records/delete${confirm ? q : "-preview"}`, method: "POST", body: body || null };
+}
+
+async function runDelete(phase, kind, target, token, body) {
+  const req = deleteRequest(kind, target, token, phase === "delete", body);
+  const headers = { Authorization: "Bearer " + token };
+  const init = { method: req.method, headers };
+  if (req.body) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(req.body); }
+  const res = await fetch(req.url, init);
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || res.statusText);
+  return j;
+}
+
+async function previewDelete(kind, target, body) {
+  const token = (val("ingestToken") || operatorToken || "").trim();
+  const statusEl = document.getElementById("mgmtStatus");
+  if (!token) { setLine(statusEl, "Enter the operator token on the Web Upload tab first.", "warn"); toast("Operator token required", "warn"); return; }
+  pendingDelete = null;
+  const box = document.getElementById("delPreview");
+  box.hidden = false;
+  box.innerHTML = stateHTML("loading", "Building deletion preview…");
+  document.getElementById("delConfirmArea").hidden = true;
+  try {
+    const j = await runDelete("preview", kind, target, token, body);
+    pendingDelete = { kind, target, token: j.token, requiresName: kind === "domain", body: body || null };
+    renderDeletePreview(j);
+    setLine(statusEl, "Review the preview, then confirm to delete.", "muted");
+  } catch (e) {
+    box.innerHTML = stateHTML("error", "Preview failed", e.message);
+    setLine(statusEl, "Preview failed: " + e.message, "warn");
+  }
+}
+
+// Parse the "selected records" inputs into the API request shape. Relationship
+// keys are accepted as "source | kind | target" and joined with the NUL
+// separator the graph uses.
+function recordSelection() {
+  const nodes = (val("recNodes") || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const edges = (val("recEdges") || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((line) => {
+    if (line.indexOf("\u0000") !== -1) return line;
+    const parts = line.split("|").map((p) => p.trim());
+    return parts.length === 3 ? parts.join("\u0000") : line;
+  });
+  return { scope: val("recScope") || "batch", target: (val("recTarget") || "").trim(), node_ids: nodes, edge_keys: edges };
+}
+
+async function previewRecords() {
+  const sel = recordSelection();
+  const statusEl = document.getElementById("mgmtStatus");
+  if (!sel.target) { setLine(statusEl, "Choose a batch or domain to scope the record deletion.", "warn"); return; }
+  if (!sel.node_ids.length && !sel.edge_keys.length) { setLine(statusEl, "List at least one node id or relationship key.", "warn"); return; }
+  await previewDelete("records", sel.target, sel);
+}
+
+async function confirmScopedDelete() {
+  if (!pendingDelete) return;
+  const token = (val("ingestToken") || operatorToken || "").trim();
+  const statusEl = document.getElementById("mgmtStatus");
+  if (!token) { setLine(statusEl, "Operator token required.", "warn"); return; }
+  if (pendingDelete.requiresName) {
+    const nameEl = document.getElementById("delConfirmName");
+    if (!nameEl || nameEl.value.trim().toLowerCase() !== pendingDelete.target.toLowerCase()) {
+      toast("Type the domain name exactly to confirm", "warn");
+      return;
+    }
+  }
+  setLine(statusEl, "Deleting…", "muted");
+  try {
+    const j = await runDelete("delete", pendingDelete.kind, pendingDelete.target, token, pendingDelete.body);
+    const msg = `Deleted ${j.deleted_nodes} node(s) and ${j.deleted_edges} relationship(s); ${j.preserved_nodes} node(s) preserved.`;
+    pendingDelete = null;
+    await afterDeletion(msg);
+  } catch (e) {
+    setLine(statusEl, "Deletion failed: " + e.message, "warn");
+    toast("Deletion failed: " + e.message, "error");
+  }
+}
+
+// After any deletion: reload the graph, drop stale path state, refresh the
+// management tables and re-populate the domain selectors.
+async function afterDeletion(msg) {
+  document.getElementById("delPreview").hidden = true;
+  document.getElementById("delConfirmArea").hidden = true;
+  resetGraphUI();
+  await reloadGraph();
+  await refreshDataMgmt();
+  await refreshIngestDomains();
+  await loadBatches();
+  await loadDomainMgmt();
+  setLine(document.getElementById("mgmtStatus"), msg, "success");
+  toast(msg, "success");
+}
+
+function wireIngestMgmt() {
+  const confirmBtn = document.getElementById("delConfirm");
+  if (confirmBtn) confirmBtn.addEventListener("click", () => confirmScopedDelete());
+  const cancel = document.getElementById("delCancel");
+  if (cancel) cancel.addEventListener("click", () => {
+    pendingDelete = null;
+    document.getElementById("delPreview").hidden = true;
+    document.getElementById("delConfirmArea").hidden = true;
+    setLine(document.getElementById("mgmtStatus"), "Deletion cancelled.", "muted");
+  });
+  const recBtn = document.getElementById("recPreviewBtn");
+  if (recBtn) recBtn.addEventListener("click", () => previewRecords());
+}
+
+// Ingestion validation preview (never writes).
+async function previewIngest() {
+  const fileEl = document.getElementById("ingestFile");
+  const out = document.getElementById("ingestPreview");
+  const statusEl = document.getElementById("ingestStatus");
+  const token = (val("ingestToken") || operatorToken || "").trim();
+  const file = fileEl && fileEl.files ? fileEl.files[0] : null;
+  if (!file) { setLine(statusEl, "Select a Graph JSON file first.", "warn"); return; }
+  if (!token) { setLine(statusEl, "Enter the operator token.", "warn"); return; }
+  out.hidden = false;
+  out.innerHTML = stateHTML("loading", "Validating…");
+  try {
+    const text = await file.text();
+    const res = await fetch("/api/v1/ingest/preview?" + ingestScopeParams().toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: text,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 422) throw new Error(j.error || res.statusText);
+    renderIngestPreview(j.preview || {}, res.status === 422 ? (j.error || "") : "");
+  } catch (e) {
+    out.innerHTML = stateHTML("error", "Preview failed", e.message);
+  }
+}
+
+function renderIngestPreview(prev, err) {
+  const out = document.getElementById("ingestPreview");
+  const cell = (n, l, cls) => `<div class="count-cell ${cls || ""}"><span class="n">${n}</span><span class="l">${esc(l)}</span></div>`;
+  const warnings = (prev.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  out.hidden = false;
+  out.innerHTML = `<h4>Import preview${prev.domain ? ` — domain “${esc(prev.domain)}”` : " — all domains in file"}</h4>
+    ${err ? `<div class="count-cell danger" style="margin-bottom:8px"><span class="l">${esc(err)}</span></div>` : ""}
+    <div class="count-grid">
+      ${cell(prev.nodes || 0, "nodes to write")}
+      ${cell(prev.edges || 0, "relationships to write")}
+      ${cell(prev.assigned_nodes || 0, "matched domain", "safe")}
+      ${cell(prev.stamped_nodes || 0, "stamped as selected")}
+      ${cell(prev.mismatch_nodes || 0, "domain mismatches", prev.mismatch_nodes ? "danger" : "")}
+      ${cell(prev.skipped_nodes || 0, "nodes skipped")}
+      ${cell(prev.skipped_edges || 0, "relationships skipped")}
+      ${cell(prev.cross_domain_edges || 0, "cross-domain relationships")}
+    </div>
+    ${(prev.domains || []).length ? `<div class="muted small">Domains in this file: ${(prev.domains || []).map(esc).join(", ")}</div>` : ""}
+    ${(prev.mismatch_domains || []).length ? `<div class="muted small">Mismatched domains: ${(prev.mismatch_domains || []).map(esc).join(", ")}</div>` : ""}
+    ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
+    <p class="muted small">This is a dry run: nothing has been written. Use “Ingest Graph” to commit, or change the domain scope options.</p>`;
+}
+
 // Drop selection, start/target anchors and path highlight after the graph is
 // replaced or cleared, so no control keeps pointing at a deleted entity.
 function resetGraphUI() {
   startNodeId = null;
   targetNodeId = null;
   pathHighlight = null;
+  pathState.paths = [];
+  pathState.selected = -1;
+  pathState.status = "idle";
+  pathState.error = "";
+  pathState.truncated = false;
+  pathState.minLength = 0;
+  pathState.sourceId = null;
+  pathState.targetId = null;
+  pathState.seq++;   // invalidate any in-flight path search
+  pathState.visible = false;
   isolateMode = false;
   clearSelection();
   updateStartUI();
+  renderPathDrawer();
+  renderPathsViewResults();
 }
 
 function wireIngestion() {
@@ -2299,6 +2697,7 @@ function wireIngestion() {
       btn.classList.add("active");
       const panel = document.getElementById("tab-" + btn.dataset.tab);
       if (panel) { panel.hidden = false; panel.classList.add("active"); }
+      if (btn.dataset.tab === "mgmt") { loadBatches(); loadDomainMgmt(); refreshIngestDomains(); }
     });
   });
 
@@ -2321,8 +2720,13 @@ function wireIngestion() {
       const file = ingestFileEl.files[0];
       const statusEl = document.getElementById("ingestStatus");
       if (file && statusEl) { statusEl.textContent = `Selected: ${file.name} (${Math.round(file.size / 1024)} KB)`; statusEl.className = "muted"; }
+      const srcEl = document.getElementById("ingestSource");
+      if (file && srcEl && !srcEl.value.trim()) srcEl.value = file.name;
     });
   }
+
+  const previewBtn = document.getElementById("ingestPreviewBtn");
+  if (previewBtn) previewBtn.addEventListener("click", () => previewIngest());
 
   const ingestSubmit = document.getElementById("ingestSubmit");
   if (ingestSubmit) {
@@ -2334,32 +2738,41 @@ function wireIngestion() {
       const file = fileEl && fileEl.files ? fileEl.files[0] : null;
       const token = tokenEl ? tokenEl.value.trim() : "";
       const replace = !!(replaceEl && replaceEl.checked);
+      const domain = (val("ingestDomain") || "").trim();
       if (!file || !token) {
         if (statusEl) { statusEl.textContent = "Select a Graph JSON file and provide an operator token."; statusEl.className = "warn"; }
         return;
       }
-      if (replace && !window.confirm("Replace the existing graph? All current data will be deleted before ingesting this file.")) {
-        if (statusEl) { statusEl.textContent = "Cancelled — nothing was changed."; statusEl.className = "muted"; }
-        return;
+      if (replace) {
+        const scope = domain ? `all existing data for the domain "${domain}"` : "the ENTIRE graph (every domain)";
+        if (!window.confirm(`Replace ${scope}? This cannot be undone.`)) {
+          if (statusEl) { statusEl.textContent = "Cancelled — nothing was changed."; statusEl.className = "muted"; }
+          return;
+        }
       }
-      if (statusEl) { statusEl.textContent = replace ? "Replacing graph…" : "Uploading…"; statusEl.className = "muted"; }
+      if (statusEl) { statusEl.textContent = replace ? "Replacing…" : "Uploading…"; statusEl.className = "muted"; }
       try {
         const text = await file.text();
-        const url = replace ? "/api/v1/ingest?mode=replace" : "/api/v1/ingest";
-        const res = await fetch(url, {
+        const p = ingestScopeParams();
+        if (replace) p.set("mode", "replace");
+        const res = await fetch("/api/v1/ingest?" + p.toString(), {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
           body: text,
         });
         const r = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(r.error || res.statusText);
-        if (statusEl) { statusEl.textContent = `OK: ${r.nodes} nodes, ${r.edges} edges ${replace ? "replaced" : "ingested"}`; statusEl.className = "success"; }
+        const batch = r.batch ? ` · batch ${r.batch.id}` : "";
+        if (statusEl) { statusEl.textContent = `OK: ${r.nodes} nodes, ${r.edges} edges ${replace ? "replaced" : "ingested"}${batch}`; statusEl.className = "success"; }
         operatorToken = token;
         setLock(true);
         toast(`${replace ? "Replaced with" : "Ingested"} ${r.nodes} nodes, ${r.edges} edges`, "success");
         if (replace) { resetGraphUI(); await reloadGraph(); }
         else if (prefs.autoRefresh) await refresh();
         await refreshDataMgmt();
+        await refreshIngestDomains();
+        await loadBatches();
+        await loadDomainMgmt();
       } catch (err) {
         if (statusEl) { statusEl.textContent = "Error: " + err.message; statusEl.className = "warn"; }
         toast("Ingest failed: " + err.message, "error");
@@ -2408,7 +2821,462 @@ function wireIngestion() {
 // Path Explorer
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Path Explorer
+// ---------------------------------------------------------------------------
+//
+// Centralised path state. `startNodeId` / `targetNodeId` (declared above) stay
+// the canonical graph markers; this block owns the discovered routes, the
+// selection, the search status and the panel visibility. Highlighting is
+// derived from here and never mutates the loaded graph data.
+
+const PATH_COLORS = ["#ffd600", "#ff5c8a", "#4de1ff", "#b388ff", "#69f0ae", "#ffab40", "#ff6e6e", "#80d8ff"];
+
+const pathState = {
+  status: "idle",     // idle | loading | ready | empty | error
+  paths: [],          // discovered routes (raw API objects)
+  selected: -1,       // focused route index; -1 = highlight every route
+  visible: false,     // drawer open?
+  truncated: false,
+  error: "",
+  sourceId: null,
+  targetId: null,
+  seq: 0,             // monotonically increasing search id; stale responses are dropped
+  mode: "bfs",        // bfs | alternative — requests the backend's route discovery mode
+  domain: "",         // optional single-domain restriction applied to every node on a route
+  minLength: 0,       // shortest hop count among the returned routes (labels shortest vs alternative)
+  options: { maxDepth: 5, maxPaths: 10, direction: "outgoing", includeNodes: [], excludeNodes: [], includeRels: [], excludeRels: [], includeDomains: [] },
+  supported: null,    // Set of relationship kinds that have an abuse template
+};
+
 let pathSrcSel = null, pathDstSel = null;
+
+function pathColor(i) { return PATH_COLORS[i % PATH_COLORS.length]; }
+
+function selectedValues(id) {
+  const el = document.getElementById(id);
+  return el ? Array.from(el.selectedOptions).map((o) => o.value) : [];
+}
+
+// Relationship kinds that have an abuse template. Used only to label a route's
+// data coverage ("audit unknown"), never to assert exploitability.
+function ensureSupportedKinds() {
+  if (pathState.supported) return Promise.resolve(pathState.supported);
+  return apiGet("/api/v1/abuse/supported").then((j) => {
+    pathState.supported = new Set((j.edges || []).map(String));
+    return pathState.supported;
+  }).catch(() => { pathState.supported = null; return null; });
+}
+
+function pathStatusOf(p) {
+  const kinds = Array.from(new Set((p.relationships || []).map((e) => String(e.kind))));
+  const missing = pathState.supported ? kinds.filter((k) => !pathState.supported.has(k)) : [];
+  if ((p.nodes || []).some((n) => !byId.has(n.id))) {
+    return { key: "unavailable", label: "unavailable", cls: "warn", note: "A node on this route is no longer loaded." };
+  }
+  if (missing.length) {
+    return { key: "unsupported", label: "audit unknown", cls: "warn", note: "No abuse template for: " + missing.join(", ") };
+  }
+  return { key: "complete", label: "complete", cls: "ok", note: "" };
+}
+
+function pathCardHTML(p, i, active) {
+  const nodes = p.nodes || [];
+  const rels = p.relationships || [];
+  const st = pathStatusOf(p);
+  const minLen = pathState.minLength || 0;
+  const routeKind = (p.relationships || []).length > minLen ? "alternative" : "shortest";
+  const trail = nodes.map((n, idx) => {
+    const cls = idx === 0 ? "path-node source" : idx === nodes.length - 1 ? "path-node target" : "path-node";
+    const mid = idx === 0 || idx === nodes.length - 1;
+    const attr = (!mid && byId.has(n.id)) ? ` data-node="${esc(n.id)}" role="link" tabindex="0"` : "";
+    const chip = `<span class="${cls}"${attr} title="${esc(nodeLabel(n))} (${esc(n.id)})">${esc(truncate(nodeLabel(n), 20))}<span class="pn-kind">${esc(n.kind || "")}</span></span>`;
+    return idx === 0 ? chip : `<span class="path-arrow">→</span>${chip}`;
+  }).join("");
+  const relChips = rels.map((e, ri) =>
+    `<span class="path-rel" data-rel="${i}:${ri}" role="link" tabindex="0" title="Inspect ${esc(e.kind)} relationship">${esc(e.kind)}</span>`
+  ).join('<span class="path-arrow-sep">›</span>');
+  const mids = nodes.slice(1, -1).map((n) => esc(nodeLabel(n)));
+  return `<div class="path-item${active ? " active" : ""}" data-path="${i}" role="button" tabindex="0" aria-label="Path ${i + 1}">
+    <div class="path-header">
+      <span class="path-index">Path ${i + 1}</span>
+      <span class="path-route ${routeKind}">${routeKind}</span>
+      <span class="path-length muted small">${rels.length} hop${rels.length === 1 ? "" : "s"} · ${nodes.length} nodes</span>
+      <span class="path-status ${st.cls}" title="${esc(st.note || st.label)}">${esc(st.label)}</span>
+    </div>
+    <div class="path-trail">${trail}</div>
+    <div class="path-rels">${relChips || '<span class="muted small">no relationships</span>'}</div>
+    <div class="path-mid muted small">${mids.length ? "via " + mids.join(" → ") : "direct relationship"}</div>
+    ${st.note ? `<div class="path-note muted small">${esc(st.note)}</div>` : ""}
+    <div class="path-footer">
+      <button type="button" class="show-path-btn chip-btn" data-path="${i}">⌖ Show on graph</button>
+      <span class="muted small">Click an intermediate node or relationship chip to inspect it. Not asserted to be exploitable.</span>
+    </div>
+  </div>`;
+}
+
+function syncPathControls() {
+  const n = pathState.paths.length;
+  const set = (id, disabled) => { const el = document.getElementById(id); if (el) el.disabled = disabled; };
+  set("pathPrev", n === 0);
+  set("pathNext", n === 0);
+  set("pathShowAll", n === 0);
+  set("pathFocusSel", n === 0 || pathState.selected < 0);
+  set("pathFit", n === 0);
+  set("pathExport", pathState.selected < 0);
+  set("pathReverse", !(pathState.sourceId && pathState.targetId));
+}
+
+// Wire the "inspect an intermediate node / inspect a relationship" affordances
+// on a rendered set of path cards. Clicking a node chip selects it in the graph
+// (opening the Node Inspector); clicking a relationship chip opens the edge
+// inspector with its real source/target/kind.
+function wirePathCardInspect(root) {
+  root.querySelectorAll(".path-node[data-node]").forEach((el) => {
+    const open = (ev) => {
+      ev.stopPropagation();
+      const n = byId.get(el.dataset.node);
+      if (!n) { toast("That node is no longer loaded", "warn"); return; }
+      setView("graph");
+      focusNode(n);
+    };
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(ev); } });
+  });
+  root.querySelectorAll(".path-rel[data-rel]").forEach((el) => {
+    const open = (ev) => {
+      ev.stopPropagation();
+      const [pi, ri] = String(el.dataset.rel).split(":").map(Number);
+      const p = pathState.paths[pi];
+      const pr = p && (p.relationships || [])[ri];
+      if (!pr) return;
+      const match = edges.find((e) => e.source === pr.source && e.target === pr.target && e.kind === pr.kind);
+      if (!match) { toast("That relationship is no longer loaded", "warn"); return; }
+      const inst = adjacency.get(pr.source);
+      const inst2 = inst && inst.out ? inst.out.find((e) => edgeKey(e) === edgeKey(match)) : null;
+      setView("graph");
+      selectEdge(inst2 || match);
+    };
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(ev); } });
+  });
+}
+
+function renderPathDrawer() {
+  const drawer = document.getElementById("pathDrawer");
+  if (!drawer) return;
+  const toggle = document.getElementById("togglePathDrawer");
+  if (toggle) {
+    toggle.hidden = !pathState.visible && pathState.paths.length === 0;
+    toggle.setAttribute("aria-pressed", pathState.visible ? "true" : "false");
+  }
+  drawer.hidden = !pathState.visible;
+  syncPathControls();
+  if (!pathState.visible) return;
+
+  const count = document.getElementById("pathDrawerCount");
+  const summary = document.getElementById("pathDrawerSummary");
+  const body = document.getElementById("pathDrawerResults");
+  if (count) count.textContent = pathState.paths.length ? `${pathState.paths.length} route${pathState.paths.length === 1 ? "" : "s"}` : "";
+  if (summary) {
+    const label = (id) => (id && byId.get(id) ? nodeLabel(byId.get(id)) : id || "");
+    const s = label(pathState.sourceId), t = label(pathState.targetId);
+    summary.textContent = s && t ? `${s} → ${t}${pathState.truncated ? " · truncated by search limits" : ""}` : "";
+  }
+  if (body) {
+    if (pathState.status === "loading") body.innerHTML = stateHTML("loading", "Searching paths…");
+    else if (pathState.status === "error") body.innerHTML = stateHTML("error", "Path search failed", pathState.error);
+    else if (pathState.status === "empty") body.innerHTML = stateHTML("empty", "No paths found", "Increase max depth, change the direction, or widen the relationship filters.");
+    else if (!pathState.paths.length) body.innerHTML = stateHTML("empty", "No paths yet", "Pick a start and a target on the graph, then choose “Find Paths”.");
+    else body.innerHTML = pathState.paths.map((p, i) => pathCardHTML(p, i, i === pathState.selected)).join("");
+    body.querySelectorAll(".path-item[data-path]").forEach((el) => {
+      const go = () => focusPath(Number(el.dataset.path), { fit: true });
+      el.addEventListener("click", (ev) => { if (ev.target.closest(".show-path-btn")) return; go(); });
+      el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
+    });
+    body.querySelectorAll(".show-path-btn").forEach((b) => b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      focusPath(Number(b.dataset.path), { showGraph: true });
+    }));
+    wirePathCardInspect(body);
+  }
+}
+
+function renderPathsViewResults() {
+  const box = document.getElementById("pathResults");
+  const note = document.getElementById("pathNote");
+  if (!box) return;
+  if (pathState.status === "loading") box.innerHTML = stateHTML("loading", "Searching paths…");
+  else if (pathState.status === "error") box.innerHTML = stateHTML("error", "Path search failed", pathState.error);
+  else if (pathState.status === "empty") box.innerHTML = stateHTML("empty", "No paths found", "Increase max depth, change the direction, or widen the relationship filters.");
+  else if (pathState.paths.length) box.innerHTML = pathState.paths.map((p, i) => pathCardHTML(p, i, i === pathState.selected)).join("");
+  else box.innerHTML = "";
+  if (note && pathState.status === "ready") {
+    if (pathState.mode === "alternative") {
+      note.textContent = pathState.truncated
+        ? `Showing the first ${pathState.paths.length} route(s) in increasing length order — bounded by max paths/depth, not the complete set of possible routes.`
+        : `${pathState.paths.length} route(s) found in increasing length order (shortest first, then alternatives). Not every possible route is listed.`;
+    } else {
+      note.textContent = pathState.truncated
+        ? `Showing the first ${pathState.paths.length} shortest path(s) — limited by max paths, not all possible routes.`
+        : `${pathState.paths.length} shortest path(s) found. These are shortest routes only, not the complete set of possible routes.`;
+    }
+  }
+  box.querySelectorAll(".path-item[data-path]").forEach((el) => el.addEventListener("click", (ev) => {
+    if (ev.target.closest(".show-path-btn")) return;
+    focusPath(Number(el.dataset.path), {});
+  }));
+  box.querySelectorAll(".show-path-btn").forEach((b) => b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    focusPath(Number(b.dataset.path), { showGraph: true });
+  }));
+  wirePathCardInspect(box);
+}
+
+// Rebuild `pathHighlight` from pathState. Unknown routes clear the highlight.
+function updatePathHighlight() {
+  if (!pathState.paths.length) {
+    pathHighlight = null;
+    updateStartUI();
+    applyFilters();
+    return;
+  }
+  const allNodes = new Set();
+  const allEdges = new Set();
+  const paths = pathState.paths.map((p, i) => {
+    const nset = new Set((p.nodes || []).map((n) => n.id));
+    const eset = new Set((p.relationships || []).map((e) => edgeKey(e)));
+    nset.forEach((id) => allNodes.add(id));
+    eset.forEach((k) => allEdges.add(k));
+    return { nodes: nset, edges: eset, color: pathColor(i), length: (p.relationships || []).length, index: i };
+  });
+  const sel = pathState.selected >= 0 && pathState.selected < paths.length ? pathState.selected : -1;
+  pathHighlight = {
+    nodes: allNodes,
+    edges: allEdges,
+    length: sel >= 0 ? paths[sel].length : (paths[0] ? paths[0].length : 0),
+    paths,
+    selected: sel,
+  };
+  updateStartUI();
+  applyFilters();
+}
+
+async function setPathResults(paths, meta = {}) {
+  pathState.paths = paths || [];
+  pathState.truncated = !!meta.truncated;
+  if (meta.sourceId) pathState.sourceId = meta.sourceId;
+  if (meta.targetId) pathState.targetId = meta.targetId;
+  pathState.minLength = pathState.paths.reduce(
+    (m, p) => Math.min(m, (p.relationships || []).length),
+    Infinity,
+  );
+  if (!isFinite(pathState.minLength)) pathState.minLength = 0;
+  pathState.status = pathState.paths.length ? "ready" : "empty";
+  pathState.selected = -1;
+  pathState.error = "";
+  if (pathState.paths.length) await ensureSupportedKinds();
+  pathState.visible = true;
+  updatePathHighlight();
+  renderPathDrawer();
+  renderPathsViewResults();
+  return pathState.paths.length;
+}
+
+// Focus one route (selected >= 0) or, with i < 0, all of them.
+function focusPath(i, opts = {}) {
+  if (i >= pathState.paths.length) return;
+  pathState.selected = i;
+  updatePathHighlight();
+  renderPathDrawer();
+  renderPathsViewResults();
+  if (opts.showGraph) { setView("graph"); setTimeout(() => fitToPathSelection(), 45); }
+  else if (opts.fit) { setTimeout(() => fitToPathSelection(), 0); }
+}
+
+function cyclePath(delta) {
+  const n = pathState.paths.length;
+  if (!n) return;
+  let idx = pathState.selected;
+  if (idx < 0) idx = delta > 0 ? 0 : n - 1;
+  else idx = (idx + delta + n) % n;
+  focusPath(idx, { fit: true });
+}
+
+function showAllPaths() {
+  if (!pathState.paths.length) return;
+  pathState.selected = -1;
+  updatePathHighlight();
+  renderPathDrawer();
+  renderPathsViewResults();
+  fitToPathSelection();
+}
+
+function fitToPathSelection() {
+  const ids = new Set();
+  if (pathState.selected >= 0 && pathState.paths[pathState.selected]) {
+    (pathState.paths[pathState.selected].nodes || []).forEach((n) => ids.add(n.id));
+  } else {
+    pathState.paths.forEach((p) => (p.nodes || []).forEach((n) => ids.add(n.id)));
+  }
+  if (ids.size) fitToNodes(ids);
+}
+
+function exportPathJSON(i) {
+  const p = pathState.paths[i];
+  if (!p) return null;
+  const st = pathStatusOf(p);
+  return JSON.stringify({
+    tool: "omenhound",
+    generated_at: new Date().toISOString(),
+    source: pathState.sourceId,
+    target: pathState.targetId,
+    selected_path: i + 1,
+    path: {
+      length: (p.relationships || []).length,
+      status: st.key,
+      status_note: st.note,
+      nodes: (p.nodes || []).map((n) => ({ id: n.id, kind: n.kind, name: n.name || n.id })),
+      steps: (p.relationships || []).map((e) => ({ from: e.source, kind: e.kind, to: e.target })),
+    },
+  }, null, 2);
+}
+
+function downloadPath(i) {
+  const text = exportPathJSON(i);
+  if (!text) { toast("No path selected to export", "warn"); return; }
+  try {
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `omenhound-path-${i + 1}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("Path exported as JSON", "success");
+  } catch (e) {
+    toast("Export failed: " + e.message, "warn");
+  }
+}
+
+function togglePathDrawer(force) {
+  pathState.visible = typeof force === "boolean" ? force : !pathState.visible;
+  renderPathDrawer();
+}
+
+function clearPathExplorer() {
+  pathState.paths = [];
+  pathState.selected = -1;
+  pathState.status = "idle";
+  pathState.error = "";
+  pathState.truncated = false;
+  pathState.visible = false;
+  pathHighlight = null;
+  updateStartUI();
+  applyFilters();
+  renderPathDrawer();
+  renderPathsViewResults();
+}
+
+async function runPathSearch(source, target, opts = {}) {
+  source = source || pathSrcSel || startNodeId;
+  target = target || pathDstSel || targetNodeId;
+  if (!source || !target) {
+    pathState.paths = [];
+    pathState.error = "Select a start and a target";
+    pathState.status = "error";
+    pathState.visible = true;
+    pathHighlight = null;
+    updateStartUI();
+    applyFilters();
+    renderPathDrawer();
+    renderPathsViewResults();
+    toast("Select a start and a target", "warn");
+    return;
+  }
+  pathState.options = {
+    maxDepth: opts.maxDepth || parseInt(val("pathDepth") || "5", 10) || 5,
+    maxPaths: opts.maxPaths || parseInt(val("pathMax") || "10", 10) || 10,
+    direction: opts.direction || val("pathDir") || "outgoing",
+    includeNodes: selectedValues("pathIncludeNodes"),
+    excludeNodes: selectedValues("pathExcludeNodes"),
+    includeRels: selectedValues("pathIncludeRels"),
+    excludeRels: selectedValues("pathExcludeRels"),
+  };
+  pathState.mode = val("pathAlgo") === "alternative" ? "alternative" : "bfs";
+  pathState.domain = (val("pathDomain") || "").trim();
+  pathState.options.includeDomains = pathState.domain ? [pathState.domain] : [];
+  pathState.sourceId = source;
+  pathState.targetId = target;
+  pathState.status = "loading";
+  pathState.paths = [];
+  pathState.selected = -1;
+  pathState.error = "";
+  pathState.visible = true;
+  pathHighlight = null;
+  updateStartUI();
+  applyFilters();
+  renderPathDrawer();
+  renderPathsViewResults();
+
+  // Each search gets a sequence number. A slow response that arrives after a
+  // newer search must not overwrite it: only the latest sequence may commit.
+  const seq = ++pathState.seq;
+  const body = {
+    source_id: source,
+    target_id: target,
+    max_depth: pathState.options.maxDepth,
+    max_paths: pathState.options.maxPaths,
+    direction: pathState.options.direction,
+    include_node_types: pathState.options.includeNodes,
+    exclude_node_types: pathState.options.excludeNodes,
+    include_relationship_types: pathState.options.includeRels,
+    exclude_relationship_types: pathState.options.excludeRels,
+    include_domains: pathState.options.includeDomains,
+    alternative: pathState.mode === "alternative",
+  };
+  try {
+    const res = await fetch("/api/v1/paths/shortest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (seq !== pathState.seq) return; // a newer search superseded this one
+    if (!res.ok) throw new Error(j.error || res.statusText);
+    const n = await setPathResults(j.paths || [], { truncated: j.truncated, sourceId: source, targetId: target });
+    if (seq !== pathState.seq) return;
+    if (n && opts.reveal !== false) { setView("graph"); setTimeout(() => fitToPathSelection(), 45); }
+    toast(n ? `Found ${n} path${n === 1 ? "" : "s"}` : "No paths found", n ? "success" : "info");
+  } catch (e) {
+    if (seq !== pathState.seq) return;
+    pathState.paths = [];
+    pathState.status = "error";
+    pathState.error = e.message;
+    pathHighlight = null;
+    updateStartUI();
+    applyFilters();
+    renderPathDrawer();
+    renderPathsViewResults();
+    toast("Path search failed: " + e.message, "warn");
+  }
+}
+
+async function reversePathSearch() {
+  const s = pathState.sourceId || pathSrcSel || startNodeId;
+  const t = pathState.targetId || pathDstSel || targetNodeId;
+  if (!s || !t) { toast("Set a start and a target first", "warn"); return; }
+  pathSrcSel = t;
+  pathDstSel = s;
+  const se = document.getElementById("pathSrc"), de = document.getElementById("pathDst");
+  if (se) se.value = byId.get(t) ? nodeLabel(byId.get(t)) : t;
+  if (de) de.value = byId.get(s) ? nodeLabel(byId.get(s)) : s;
+  setStartNode(t, { focus: false });
+  setTargetNode(s);
+  await runPathSearch(t, s, { reveal: true });
+}
 
 function populatePathOptions() {
   const kinds = statsCache && statsCache.kinds ? Object.keys(statsCache.kinds) : [...new Set(nodes.map((n) => n.kind))];
@@ -2426,11 +3294,18 @@ function populatePathOptions() {
   keep(excludeRels, relOptions);
 
   const note = document.getElementById("pathNote");
-  if (note) note.textContent = "Backend executes a breadth-first shortest-path search. Dijkstra is not implemented server-side.";
+  if (note) note.textContent = "Backend runs a breadth-first search: “Shortest paths” returns only minimum-hop routes, while “Shortest + alternatives” also returns longer simple routes in increasing length order. Dijkstra is not implemented server-side.";
   const algo = document.getElementById("pathAlgo");
   if (algo) {
     const opt = algo.querySelector('option[value="dijkstra"]');
-    if (opt) { opt.disabled = true; opt.title = "Not implemented by the backend (BFS only)"; }
+    if (opt) { opt.disabled = true; opt.title = "Not implemented by the backend (unweighted BFS only)"; }
+  }
+
+  // Domain datalist for the optional domain restriction.
+  const dl = document.getElementById("pathDomainList");
+  if (dl) {
+    const domains = [...new Set(nodes.map((n) => (n.domain || "").trim()).filter(Boolean))].sort();
+    dl.innerHTML = domains.map((d) => `<option value="${esc(d)}"></option>`).join("");
   }
 }
 
@@ -2474,84 +3349,58 @@ function wirePathSuggest(inputId, resId, setter) {
   });
 }
 
+function wirePathDrawer() {
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+  on("togglePathDrawer", () => togglePathDrawer());
+  on("pathDrawerClose", () => togglePathDrawer(false));
+  on("pathDrawerCollapse", () => {
+    const d = document.getElementById("pathDrawer");
+    if (!d) return;
+    const collapsed = d.classList.toggle("collapsed");
+    const btn = document.getElementById("pathDrawerCollapse");
+    if (btn) { btn.textContent = collapsed ? "⟩" : "⟨"; btn.setAttribute("aria-pressed", collapsed ? "true" : "false"); }
+    setTimeout(resize, 200);
+  });
+  on("pathShowAll", () => showAllPaths());
+  on("pathFocusSel", () => focusPath(pathState.selected, { fit: true }));
+  on("pathPrev", () => cyclePath(-1));
+  on("pathNext", () => cyclePath(1));
+  on("pathFit", () => fitToPathSelection());
+  on("pathReverse", () => reversePathSearch());
+  on("pathExport", () => downloadPath(pathState.selected));
+  on("pathDrawerClear", () => clearPathExplorer());
+
+  const findRun = document.getElementById("findPathsRun");
+  if (findRun) findRun.addEventListener("click", () => {
+    if (!startNodeId || !targetNodeId) { toast("Set a starting node and a target first", "warn"); return; }
+    pathSrcSel = startNodeId;
+    pathDstSel = targetNodeId;
+    runPathSearch(startNodeId, targetNodeId);
+  });
+}
+
 function wirePathExplorer() {
   wirePathSuggest("pathSrc", "pathSrcRes", (id) => { pathSrcSel = id; });
   wirePathSuggest("pathDst", "pathDstRes", (id) => { pathDstSel = id; });
 
   const btn = document.getElementById("pathSearch");
-  if (btn) {
-    btn.addEventListener("click", async () => {
-      const results = document.getElementById("pathResults");
-      if (!results) return;
-      if (!pathSrcSel || !pathDstSel) {
-        results.innerHTML = stateHTML("error", "Select a source and a destination", "Use the search boxes above; pick an object from the suggestions.");
-        return;
-      }
-      results.innerHTML = stateHTML("loading", "Searching paths…");
-      const body = {
-        source_id: pathSrcSel,
-        target_id: pathDstSel,
-        max_depth: parseInt(val("pathDepth") || "5", 10),
-        max_paths: parseInt(val("pathMax") || "10", 10),
-        direction: val("pathDir") || "outgoing",
-        include_node_types: Array.from(document.getElementById("pathIncludeNodes").selectedOptions).map((o) => o.value),
-        exclude_node_types: Array.from(document.getElementById("pathExcludeNodes").selectedOptions).map((o) => o.value),
-        include_relationship_types: Array.from(document.getElementById("pathIncludeRels").selectedOptions).map((o) => o.value),
-        exclude_relationship_types: Array.from(document.getElementById("pathExcludeRels").selectedOptions).map((o) => o.value),
-      };
-      try {
-        const res = await fetch("/api/v1/paths/shortest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(j.error || res.statusText);
-        const paths = j.paths || [];
-        const note = document.getElementById("pathNote");
-        if (note) note.textContent = j.truncated ? `Showing the first ${paths.length} paths (result truncated by max_paths).` : `${paths.length} path(s) found.`;
-        if (!paths.length) {
-          results.innerHTML = stateHTML("empty", "No paths found", "Try increasing max depth or changing the direction.");
-          return;
-        }
-        results.innerHTML = paths.map((p, i) => {
-          const nodeChips = (p.nodes || []).map((n, idx) => {
-            const cls = idx === 0 ? "path-node source" : idx === (p.nodes.length - 1) ? "path-node target" : "path-node";
-            const chip = `<span class="${cls}">${esc(nodeLabel(n))}</span>`;
-            return idx === 0 ? chip : `<span class="path-arrow">→</span>${chip}`;
-          }).join("");
-          const relChips = (p.relationships || []).map((e) => `<span class="path-rel">${esc(e.kind)}</span>`).join("");
-          return `<div class="path-item">
-            <div class="path-header"><span class="path-length">len ${p.length}</span><span class="muted small">Path ${i + 1}</span></div>
-            <div class="path-nodes">${nodeChips}</div>
-            <div class="path-rels">${relChips}</div>
-            <div class="path-footer">
-              <button type="button" class="show-path-btn chip-btn" data-path="${i}">⌖ Show on graph</button>
-              <span class="muted small">Edges and direction are dataset evidence; a path is not asserted to be exploitable.</span>
-            </div>
-          </div>`;
-        }).join("");
-        // Highlight any path directly on the graph canvas.
-        results.querySelectorAll(".show-path-btn").forEach((b) => {
-          b.addEventListener("click", () => {
-            const p = paths[Number(b.dataset.path)];
-            if (p) highlightPath(p);
-          });
-        });
-      } catch (e) {
-        results.innerHTML = stateHTML("error", "Path search failed", e.message);
-      }
-    });
-  }
+  if (btn) btn.addEventListener("click", () => runPathSearch(pathSrcSel, pathDstSel, { reveal: false }));
 
   const clearBtn = document.getElementById("pathClear");
   if (clearBtn) {
     clearBtn.addEventListener("click", () => {
-      const s = document.getElementById("pathSrc"), d = document.getElementById("pathDst"), r = document.getElementById("pathResults");
+      const s = document.getElementById("pathSrc"), d = document.getElementById("pathDst");
       if (s) s.value = "";
       if (d) d.value = "";
-      if (r) r.innerHTML = "";
-      pathSrcSel = null; pathDstSel = null;
+      pathSrcSel = null;
+      pathDstSel = null;
+      clearPathExplorer();
       const note = document.getElementById("pathNote");
       if (note) note.textContent = "";
     });
   }
+
+  wirePathDrawer();
 }
 
 // ---------------------------------------------------------------------------
@@ -3178,6 +4027,7 @@ function init() {
   wireSettings();
   wireGate();
   wireIngestion();
+  wireIngestMgmt();
   wirePathExplorer();
   wireAttacks();
   wireGlobalSearch();

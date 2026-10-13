@@ -113,7 +113,9 @@
               <label class="icon-btn" title="Show legend" aria-label="Toggle legend"><input type="checkbox" id="showLegend" checked> Legend</label>
             </div>
             <div class="toolbar-group" role="group" aria-label="Analysis">
+              <button id="findPathsRun" class="icon-btn" title="Find paths between the starting node and the target" aria-label="Find paths between start and target" disabled>⇉ Find Paths</button>
               <button id="findPathsFromGraph" class="icon-btn" title="Open Path Explorer from the starting node" aria-label="Find paths from the starting node">⇄ Paths</button>
+              <button id="togglePathDrawer" class="icon-btn" title="Show / hide the Path Explorer panel" aria-label="Toggle Path Explorer" aria-pressed="false" hidden>☰ Routes</button>
             </div>
             <div class="toolbar-group toolbar-summary">
               <span id="selectionSummary" class="muted small" aria-live="polite">Nothing selected</span>
@@ -124,6 +126,28 @@
             <div id="graphStatus" class="graph-status" aria-live="polite" hidden></div>
             <div id="legend" class="legend overlay" aria-label="Graph legend"></div>
             <div id="graphTooltip" class="graph-tooltip" role="tooltip" hidden></div>
+            <aside id="pathDrawer" class="path-drawer" role="complementary" aria-label="Path Explorer" hidden>
+              <div class="path-drawer-header">
+                <h2>Path Explorer</h2>
+                <span id="pathDrawerCount" class="muted small" aria-live="polite"></span>
+                <div class="path-drawer-actions">
+                  <button id="pathDrawerCollapse" class="icon-btn" title="Collapse the panel" aria-label="Collapse Path Explorer" aria-pressed="false">⟨</button>
+                  <button id="pathDrawerClose" class="icon-btn" title="Close the panel" aria-label="Close Path Explorer">✕</button>
+                </div>
+              </div>
+              <div id="pathDrawerSummary" class="path-drawer-summary muted small"></div>
+              <div id="pathDrawerResults" class="path-drawer-body"></div>
+              <div class="path-drawer-controls" role="group" aria-label="Path highlighting controls">
+                <button id="pathShowAll" class="chip-btn" title="Highlight every discovered path">Show all</button>
+                <button id="pathFocusSel" class="chip-btn" title="Emphasise the selected path">Focus</button>
+                <button id="pathPrev" class="chip-btn" title="Previous path">↑ Prev</button>
+                <button id="pathNext" class="chip-btn" title="Next path">↓ Next</button>
+                <button id="pathFit" class="chip-btn" title="Fit the selected path to the view">⛶ Fit</button>
+                <button id="pathReverse" class="chip-btn" title="Swap the start and target, then search again">⇄ Reverse</button>
+                <button id="pathExport" class="chip-btn" title="Export the selected path as JSON">⭳ Export</button>
+                <button id="pathDrawerClear" class="chip-btn" title="Clear the highlighted paths and results">Clear</button>
+              </div>
+            </aside>
             <aside class="panel" id="panel" role="complementary" aria-label="Inspector">
             <div class="panel-header">
               <h2 id="panelTitle">Inspector</h2>
@@ -411,7 +435,8 @@
             <div>
               <label>Algorithm</label>
               <select id="pathAlgo" aria-label="Algorithm">
-                <option value="bfs">BFS (Shortest)</option>
+                <option value="bfs">Shortest paths (BFS)</option>
+                <option value="alternative">Shortest + alternatives</option>
                 <option value="dijkstra">Dijkstra (Weighted)</option>
               </select>
             </div>
@@ -432,6 +457,17 @@
             <div>
               <label>Exclude Rel Types</label>
               <select id="pathExcludeRels" multiple aria-label="Exclude relationship types"></select>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div>
+              <label>Domain filter</label>
+              <input id="pathDomain" list="pathDomainList" placeholder="Any domain" autocomplete="off" aria-label="Restrict the search to one domain" />
+              <datalist id="pathDomainList"></datalist>
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <p class="muted small">Restricts every node on a route (including the target) to the selected domain. Alternative mode also returns longer routes, still bounded by Max Depth and Max Paths.</p>
             </div>
           </div>
           <div class="toolbar">
@@ -462,25 +498,57 @@
           <h2 id="ingestion-title">Graph Ingestion</h2>
           <div class="ingestion-tabs">
             <button class="tab-btn active" data-tab="web">Web Upload</button>
+            <button class="tab-btn" data-tab="mgmt">Ingestion Management</button>
             <button class="tab-btn" data-tab="cli">CLI / API Guidance</button>
           </div>
-          <div class="tab-panel" id="tab-web">
+          <div class="tab-panel active" id="tab-web">
             <p class="muted">Upload a Graph JSON file to ingest into the server. Requires Write API token.</p>
             <div class="field">
               <label>Graph JSON File</label>
-              <input type="file" id="ingestFile" accept=".json" aria-label="Graph JSON file" />
+              <input type="file" id="ingestFile" accept=".json,.zip" aria-label="Graph JSON file" />
             </div>
             <div class="field">
               <label>Operator Token</label>
               <input id="ingestToken" type="password" placeholder="omh_xxx" autocomplete="off" aria-label="Operator token" />
             </div>
+            <fieldset class="scope-box">
+              <legend>Domain scope</legend>
+              <p class="muted small">Choose the domain this file belongs to. Leave blank to import every domain the file contains. Entities that belong to a different domain are rejected unless you choose to skip them.</p>
+              <div class="inline-fields">
+                <div class="field">
+                  <label>Domain</label>
+                  <input id="ingestDomain" list="ingestDomainList" placeholder="All domains in the file" autocomplete="off" aria-label="Domain scope" />
+                  <datalist id="ingestDomainList"></datalist>
+                </div>
+                <div class="field">
+                  <label>On mismatch</label>
+                  <select id="ingestOnMismatch" aria-label="On domain mismatch">
+                    <option value="reject">Reject (abort import)</option>
+                    <option value="skip">Skip mismatched records</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Unknown domain</label>
+                  <select id="ingestUnknown" aria-label="Unknown domain handling">
+                    <option value="keep">Keep as-is</option>
+                    <option value="stamp">Assign to selected domain</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Source label</label>
+                  <input id="ingestSource" placeholder="filename" autocomplete="off" aria-label="Batch source label" />
+                </div>
+              </div>
+            </fieldset>
             <label class="check-row">
               <input type="checkbox" id="ingestReplace" />
-              <span>Replace existing graph (delete all current data before ingesting)</span>
+              <span>Replace existing data for the selected domain (or the entire graph when no domain is selected)</span>
             </label>
-            <p class="muted small">Off by default: an ingest merges into the graph you already have. Turn it on to end up with only the file you upload.</p>
+            <p class="muted small">Off by default: an ingest merges into the graph you already have. With a domain selected, replace removes only that domain's existing data; other domains are never touched.</p>
+            <div id="ingestPreview" class="ingest-preview" aria-live="polite" hidden></div>
             <div id="ingestStatus" class="muted" aria-live="polite"></div>
             <div class="modal-actions">
+              <button id="ingestPreviewBtn" class="chip-btn">Validate &amp; Preview</button>
               <button id="ingestSubmit" class="primary">Ingest Graph</button>
             </div>
             <details class="ingest-details">
@@ -489,13 +557,66 @@
             </details>
             <hr class="sep" />
             <div class="danger-zone">
-              <h3>Delete data</h3>
-              <p class="muted small">Remove every node and relationship the server currently holds, so you can start again from a single dataset. This cannot be undone.</p>
+              <h3>⚠ Delete ALL graph data (global, every domain)</h3>
+              <p class="muted small">Remove every node and relationship the server currently holds, across every domain and ingestion batch. This cannot be undone. To remove only one batch or one domain, use the <strong>Ingestion Management</strong> tab.</p>
               <div id="clearStatus" class="muted" aria-live="polite">Current graph: —</div>
               <div class="modal-actions">
                 <button id="clearGraph" class="danger">🗑 Delete all graph data</button>
               </div>
             </div>
+          </div>
+          <div class="tab-panel" id="tab-mgmt" hidden>
+            <p class="muted">Every import is tracked as a batch with its own provenance. Removing a batch or a domain only deletes the records that are safe to remove; records also contributed by another import, and every other domain, are preserved.</p>
+            <h3>Ingestion batches</h3>
+            <div class="table-wrap">
+              <table class="table" aria-label="Ingestion batches">
+                <thead><tr><th>Batch</th><th>Source</th><th>Domain</th><th>Imported</th><th>Nodes</th><th>Edges</th><th>Status</th><th></th></tr></thead>
+                <tbody id="batchRows"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+              </table>
+            </div>
+            <h3>Domains</h3>
+            <div class="table-wrap">
+              <table class="table" aria-label="Domains">
+                <thead><tr><th>Domain</th><th>Nodes</th><th>Edges</th><th>Batches</th><th></th></tr></thead>
+                <tbody id="domainRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+              </table>
+            </div>
+            <h3>Delete specific records</h3>
+            <p class="muted small">Remove only the records you list, within a batch or domain scope. Every id is validated against that scope, so nothing outside it can be deleted.</p>
+            <div class="scope-box">
+              <div class="inline-fields">
+                <label>Scope
+                  <select id="recScope" aria-label="Record deletion scope">
+                    <option value="batch">Batch</option>
+                    <option value="domain">Domain</option>
+                  </select>
+                </label>
+                <label>Target
+                  <input id="recTarget" list="ingestDomainList" placeholder="batch id or domain" autocomplete="off" aria-label="Record deletion target" />
+                </label>
+              </div>
+              <div class="field">
+                <label for="recNodes">Node IDs (one per line)</label>
+                <textarea id="recNodes" rows="3" autocomplete="off" placeholder="S-1-5-21-…"></textarea>
+              </div>
+              <div class="field">
+                <label for="recEdges">Relationship keys — source ⇥ kind ⇥ target (one per line)</label>
+                <textarea id="recEdges" rows="2" autocomplete="off" placeholder="S-1-5-21-… | MemberOf | S-1-5-21-…"></textarea>
+              </div>
+              <button id="recPreviewBtn" class="chip-btn" type="button">Preview selected records</button>
+            </div>
+            <div id="delPreview" class="del-preview" hidden></div>
+            <div id="delConfirmArea" class="del-confirm" hidden>
+              <div class="field" id="delNameWrap" hidden>
+                <label>Type the domain name to confirm</label>
+                <input id="delConfirmName" autocomplete="off" aria-label="Confirm domain name" />
+              </div>
+              <div class="modal-actions">
+                <button id="delCancel" class="chip-btn">Cancel</button>
+                <button id="delConfirm" class="danger" disabled>Confirm deletion</button>
+              </div>
+            </div>
+            <div id="mgmtStatus" class="muted" aria-live="polite"></div>
           </div>
           <div class="tab-panel" id="tab-cli" hidden>
             <h3>Collector (LDAP + SMB)</h3>

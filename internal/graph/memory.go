@@ -24,15 +24,25 @@ type Memory struct {
 	edges map[string]model.Edge
 	out   map[string]map[string]model.Edge // source -> edge key -> edge
 	in    map[string]map[string]model.Edge // target -> edge key -> edge
+
+	// Ingestion provenance. nodeProv/edgeProv map an entity to the set of batch
+	// IDs that have contributed to it; batches holds the batch metadata. This is
+	// deliberately separate from the canonical node/edge model.
+	batches  map[string]IngestBatch
+	nodeProv map[string]map[string]struct{}
+	edgeProv map[string]map[string]struct{}
 }
 
 // NewMemory returns an empty in-memory store.
 func NewMemory() *Memory {
 	return &Memory{
-		nodes: make(map[string]model.Node),
-		edges: make(map[string]model.Edge),
-		out:   make(map[string]map[string]model.Edge),
-		in:    make(map[string]map[string]model.Edge),
+		nodes:    make(map[string]model.Node),
+		edges:    make(map[string]model.Edge),
+		out:      make(map[string]map[string]model.Edge),
+		in:       make(map[string]map[string]model.Edge),
+		batches:  make(map[string]IngestBatch),
+		nodeProv: make(map[string]map[string]struct{}),
+		edgeProv: make(map[string]map[string]struct{}),
 	}
 }
 
@@ -104,7 +114,8 @@ func (m *Memory) DeleteEdge(_ context.Context, source, target string, kind model
 	return nil
 }
 
-// Clear implements Store. It drops every node and relationship.
+// Clear implements Store. It drops every node and relationship, and the
+// ingestion provenance that pointed at them.
 func (m *Memory) Clear(_ context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -112,6 +123,9 @@ func (m *Memory) Clear(_ context.Context) error {
 	m.edges = make(map[string]model.Edge)
 	m.out = make(map[string]map[string]model.Edge)
 	m.in = make(map[string]map[string]model.Edge)
+	m.batches = make(map[string]IngestBatch)
+	m.nodeProv = make(map[string]map[string]struct{})
+	m.edgeProv = make(map[string]map[string]struct{})
 	return nil
 }
 
@@ -280,7 +294,22 @@ func sortEdges(e []model.Edge) {
 
 var _ Store = (*Memory)(nil)
 
-// ShortestPaths implements Store using BFS.
+// ShortestPaths implements Store using breadth-first search. It returns up to
+// MaxPaths distinct shortest routes from SourceID to TargetID.
+//
+// The search is read-only: it never mutates the adjacency maps, so concurrent
+// readers and later queries are unaffected. Relationships are returned exactly
+// as stored (Source -> Target) so callers can match them against the dataset;
+// traversal direction is conveyed by the order of the nodes.
+//
+// A node is only expanded at its shortest observed depth, so every returned
+// route is a shortest path. Equal-length alternatives are explored (which is
+// what makes MaxPaths > 1 meaningful) under a hard expansion budget so a dense
+// graph yields a truncated result instead of hanging.
+//
+// When RequiredIntermediateNodeIDs is set, the shortest-depth prune is relaxed
+// so routes through those nodes stay reachable; returned routes are then the
+// shortest simple routes satisfying the constraint within the budget.
 func (m *Memory) ShortestPaths(_ context.Context, req ShortestPathRequest) (ShortestPathResult, error) {
 	if req.SourceID == "" || req.TargetID == "" {
 		return ShortestPathResult{}, nil
@@ -291,139 +320,191 @@ func (m *Memory) ShortestPaths(_ context.Context, req ShortestPathRequest) (Shor
 	if req.MaxPaths <= 0 {
 		req.MaxPaths = 10
 	}
+	if req.MaxPaths > maxPathLimit {
+		req.MaxPaths = maxPathLimit
+	}
 
 	m.mu.RLock()
-	if _, ok1 := m.nodes[req.SourceID]; !ok1 {
-		m.mu.RUnlock()
-		return ShortestPathResult{}, nil
-	}
-	if _, ok2 := m.nodes[req.TargetID]; !ok2 {
-		m.mu.RUnlock()
-		return ShortestPathResult{}, nil
-	}
-	m.mu.RUnlock()
+	defer m.mu.RUnlock()
 
-	type state struct {
+	if _, ok := m.nodes[req.SourceID]; !ok {
+		return ShortestPathResult{}, nil
+	}
+	if _, ok := m.nodes[req.TargetID]; !ok {
+		return ShortestPathResult{}, nil
+	}
+
+	type frame struct {
 		node  string
-		path  []string
+		nodes []string
 		edges []model.Edge
 		depth int
 	}
-	queue := []state{{node: req.SourceID, path: []string{req.SourceID}, edges: []model.Edge{}, depth: 0}}
-	visited := map[string]int{req.SourceID: 0}
+	queue := []frame{{node: req.SourceID, nodes: []string{req.SourceID}}}
+	// With required intermediates the shortest-to-node prune is unsound: a
+	// required node may be reachable more cheaply by a branch that does not
+	// visit it, so those routes must stay explorable. Alternative-mode searches
+	// deliberately disable the prune too, so longer (non-shortest) simple routes
+	// are enumerated in increasing length order. The expansion cap keeps both
+	// cases bounded.
+	prune := len(req.RequiredIntermediateNodeIDs) == 0 && !req.Alternative
+	dist := map[string]int{req.SourceID: 0}
+	seen := make(map[string]struct{})
 	var paths []Path
+	expansions := 0
+	truncated := false
+	over := false
 
-	for i := 0; i < len(queue); i++ {
-		cur := queue[i]
+	for head := 0; head < len(queue); head++ {
+		if len(paths) >= req.MaxPaths {
+			truncated = true
+			break
+		}
+		cur := queue[head]
 		if cur.depth >= req.MaxDepth {
 			continue
 		}
-		neighbors := m.out[cur.node]
-		if req.Direction == Incoming || req.Direction == Undirected {
-			for _, e := range m.in[cur.node] {
-				neighbors["rev"+e.Source+string(e.Kind)+e.Target] = e
+		for _, e := range m.pathNeighbors(cur.node, req.Direction) {
+			nxt, ok := otherEnd(e, cur.node)
+			if !ok || !relAllowed(e.Kind, req) {
+				continue
 			}
+			// No repeated nodes within a single route: keeps paths simple and
+			// prevents cycles from expanding forever.
+			if containsNode(cur.nodes, nxt) {
+				continue
+			}
+			nn, ok := m.nodes[nxt]
+			if !ok || !nodeAllowed(nn, req) {
+				continue
+			}
+			nd := cur.depth + 1
+			if prune {
+				if prev, found := dist[nxt]; found && nd > prev {
+					// A strictly shorter route to this node already exists; any
+					// route through the longer one cannot be a shortest path.
+					continue
+				}
+				dist[nxt] = nd
+			}
+			expansions++
+			if expansions > maxSearchExpansions {
+				truncated = true
+				over = true
+				break
+			}
+
+			nodes := appendCopy(cur.nodes, nxt)
+			edges := appendEdgeCopy(cur.edges, e)
+			if nxt == req.TargetID {
+				if !hasRequired(nodes, req.RequiredIntermediateNodeIDs) {
+					continue
+				}
+				if sig := edgePathSig(edges); sig != "" {
+					if _, dup := seen[sig]; dup {
+						continue
+					}
+					seen[sig] = struct{}{}
+				}
+				paths = append(paths, Path{
+					Nodes:         m.getNodesFromPath(nodes),
+					Relationships: edges,
+					Length:        len(edges),
+				})
+				continue // the target terminates the route
+			}
+			queue = append(queue, frame{node: nxt, nodes: nodes, edges: edges, depth: nd})
 		}
-		for _, e := range neighbors {
-			edge := e
-			if edge.Source != cur.node && (req.Direction == Outgoing || req.Direction == Incoming) {
-				// for undirected we need to handle; but simpler: reconstruct
-			}
-			nxtNode := edge.Target
-			if edge.Target == cur.node {
-				nxtNode = edge.Source
-				edge2 := model.Edge{Source: edge.Target, Target: edge.Source, Kind: edge.Kind}
-				edge = edge2
-			}
-			if req.Direction == Incoming && edge.Source == cur.node && edge.Target != cur.node {
-				continue
-			}
-			// filter relationship types
-			if len(req.IncludeRelationshipTypes) > 0 {
-				ok := false
-				for _, k := range req.IncludeRelationshipTypes {
-					if edge.Kind == k {
-						ok = true
-						break
-					}
-				}
-				if !ok {
-					continue
-				}
-			}
-			if len(req.ExcludeRelationshipTypes) > 0 {
-				ex := false
-				for _, k := range req.ExcludeRelationshipTypes {
-					if edge.Kind == k {
-						ex = true
-						break
-					}
-				}
-				if ex {
-					continue
-				}
-			}
-			n, on := m.nodes[nxtNode]
-			if !on {
-				continue
-			}
-			if len(req.IncludeNodeTypes) > 0 {
-				ok := false
-				for _, k := range req.IncludeNodeTypes {
-					if n.Kind == k {
-						ok = true
-						break
-					}
-				}
-				if !ok {
-					continue
-				}
-			}
-			if len(req.ExcludeNodeTypes) > 0 {
-				ex := false
-				for _, k := range req.ExcludeNodeTypes {
-					if n.Kind == k {
-						ex = true
-						break
-					}
-				}
-				if ex {
-					continue
-				}
-			}
-			if nxtNode == req.TargetID {
-				pn := make([]model.Node, 0, len(cur.path)+1)
-				for _, pid := range append(cur.path, nxtNode) {
-					if nn, ok := m.nodes[pid]; ok {
-						pn = append(pn, nn)
-					}
-				}
-				pe := make([]model.Edge, 0, len(cur.edges)+1)
-				for _, ee := range cur.edges {
-					pe = append(pe, ee)
-				}
-				pe = append(pe, edge)
-				paths = append(paths, Path{Nodes: pn, Relationships: pe, Length: len(pe)})
-				if len(paths) >= req.MaxPaths {
-					break
-				}
-				continue
-			}
-			if prev, seen := visited[nxtNode]; seen && prev <= cur.depth+1 {
-				continue
-			}
-			visited[nxtNode] = cur.depth + 1
-			newPath := append(append([]string(nil), cur.path...), nxtNode)
-			newEdges := append(append([]model.Edge(nil), cur.edges...), edge)
-			queue = append(queue, state{node: nxtNode, path: newPath, edges: newEdges, depth: cur.depth + 1})
-		}
-		if len(paths) >= req.MaxPaths {
+		if over {
 			break
 		}
 	}
 
-	trunc := len(paths) >= req.MaxPaths
-	return ShortestPathResult{Paths: paths, Truncated: trunc}, nil
+	if len(paths) >= req.MaxPaths {
+		truncated = true
+	}
+	return ShortestPathResult{Paths: paths, Truncated: truncated}, nil
+}
+
+// pathNeighbors returns the candidate edges to traverse from node, honouring
+// the requested direction. It never mutates the store's adjacency maps; the
+// result is deterministic (sorted) and deduplicated so self-loops that appear
+// in both the incoming and outgoing maps are not expanded twice.
+func (m *Memory) pathNeighbors(node string, dir Direction) []model.Edge {
+	out := make([]model.Edge, 0, len(m.out[node])+len(m.in[node]))
+	appendAll := func(mp map[string]model.Edge) {
+		for _, e := range mp {
+			out = append(out, e)
+		}
+	}
+	if dir == Outgoing || dir == Undirected {
+		appendAll(m.out[node])
+	}
+	if dir == Incoming || dir == Undirected {
+		appendAll(m.in[node])
+	}
+	sortEdges(out)
+	uniq := out[:0]
+	var last string
+	for i, e := range out {
+		k := edgeKey(e)
+		if i > 0 && k == last {
+			continue
+		}
+		uniq = append(uniq, e)
+		last = k
+	}
+	return uniq
+}
+
+// otherEnd returns the far endpoint of edge relative to node. The edge is
+// always reported in its stored orientation, so consumers can highlight it.
+func otherEnd(e model.Edge, node string) (string, bool) {
+	switch {
+	case e.Source == node:
+		return e.Target, true
+	case e.Target == node:
+		return e.Source, true
+	default:
+		return "", false
+	}
+}
+
+// appendCopy returns a new slice: ids followed by id. Siblings in the BFS must
+// not share a backing array, or one route's append would corrupt another's.
+func appendCopy(ids []string, id string) []string {
+	out := make([]string, len(ids)+1)
+	copy(out, ids)
+	out[len(ids)] = id
+	return out
+}
+
+// appendEdgeCopy returns a new slice: es followed by e.
+func appendEdgeCopy(es []model.Edge, e model.Edge) []model.Edge {
+	out := make([]model.Edge, len(es)+1)
+	copy(out, es)
+	out[len(es)] = e
+	return out
+}
+
+// edgePathSig is a stable signature for a route, used to drop duplicate
+// discovery of the same sequence of relationships.
+func edgePathSig(es []model.Edge) string {
+	if len(es) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, e := range es {
+		if i > 0 {
+			b.WriteByte('>')
+		}
+		b.WriteString(e.Source)
+		b.WriteByte('|')
+		b.WriteString(string(e.Kind))
+		b.WriteByte('|')
+		b.WriteString(e.Target)
+	}
+	return b.String()
 }
 
 func (m *Memory) getNodesFromPath(pids []string) []model.Node {

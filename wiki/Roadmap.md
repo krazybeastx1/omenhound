@@ -67,11 +67,23 @@ every gap is reported rather than faked. This page is the current boundary.
   1.2+ for AD writes, bearer-token auth (constant-time), per-action approval on password
   changes, security headers, rate limiting, pagination, strict ingest, and a redacting
   audit log.
+- **Start→Target path highlighting** — a breadth-first search between a start and target
+  returns up to *max paths* distinct shortest routes, shown in a collapsible **Path
+  Explorer** panel beside the canvas with per-route colours, green START / red TARGET
+  markers, per-route focus, reverse search and JSON export. The search is read-only and
+  never mutates the graph; the UI states when a limit truncated the result.
+- **Domain-scoped ingestion & scoped deletion** — an import can be constrained to one
+  domain (objects that declare another domain are refused, never mixed), is tracked as a
+  **batch**, and can be deleted by batch or by domain through a preview-and-confirm
+  workflow. The server re-validates the preview, preserves records another import shares,
+  and reports exactly what it removed. Scoped deletion needs a provenance-tracking store
+  (the in-memory store does).
 
 ## In progress / next
 
 | Item | Notes |
 |---|---|
+| **Provenance on Neo4j** | Scoped deletion on the Neo4j backend needs batch/domain tags plus a migration; until then the API refuses scoped deletion there with a clear error rather than deleting blindly. |
 | **Incremental merge** | SID-keyed incremental re-collection with **stale-edge expiry** (edges carry `first_seen`/`last_seen`). |
 | **Concurrent SMB** | The SMB pass is deliberately sequential (OPSEC); a bounded worker pool is the fast-mode follow-up. |
 | **Delegation collection** | `AllowedToDelegate` / `AllowedToAct` are imported but not yet collected natively. |
