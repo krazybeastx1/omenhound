@@ -116,9 +116,13 @@ bloodyAD --host DC.omenhound.lab -d omenhound.lab -u jdoe -p '<password>' set pa
 
 ## Screenshots
 
-| Attack-path graph | Dynamic abuse panel | Write-API auth gate |
+| Attack-path graph + technique library | Dynamic abuse panel (Read + Add) | Write-API auth gate |
 |---|---|---|
 | ![graph](wiki/img/webui-graph.png) | ![abuse](wiki/img/webui-abuse.png) | ![gate](wiki/img/webui-authgate.png) |
+
+The graph shot is the default view: the Inspector is empty, so it shows the grouped
+**technique library** (10 categories / 54 techniques). Clicking an edge opens the
+per-edge **Read + Add** panel with your graph's real values and a `/api/abuse` link.
 
 ---
 
