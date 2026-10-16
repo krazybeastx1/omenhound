@@ -73,6 +73,7 @@
       <!-- Graph Explorer -->
       <section id="view-graph" class="view active" aria-labelledby="graph-title">
         <div class="graph-wrap">
+          <div id="datasetBanner" class="dataset-banner" aria-live="polite" hidden></div>
           <div class="graph-toolbar" role="toolbar" aria-label="Graph controls">
             <div class="toolbar-group" role="group" aria-label="Navigation">
               <button id="zoomOut" class="icon-btn" title="Zoom out" aria-label="Zoom out">−</button>
@@ -101,6 +102,8 @@
               <span class="muted small">Filters:</span>
               <select id="nodeKindFilter" aria-label="Filter by node kind"><option value="">All Types</option></select>
               <select id="edgeKindFilter" aria-label="Filter by relationship type"><option value="">All Relationships</option></select>
+              <select id="sourceFilter" aria-label="Filter by collection source"><option value="">All Sources</option></select>
+              <select id="datasetFilter" aria-label="Filter by ingestion dataset"><option value="">All Datasets</option></select>
               <button id="sessionsOnly" class="icon-btn" title="Show only session relationships" aria-label="Show only session relationships" aria-pressed="false">👥</button>
               <button id="isolateToggle" class="icon-btn" title="Isolate selection and neighbours" aria-label="Isolate selection and neighbours" aria-pressed="false">◉</button>
               <button id="hideUnrelatedEdges" class="icon-btn" title="Hide unrelated edges" aria-label="Hide unrelated edges" aria-pressed="false">⊘</button>
@@ -126,6 +129,7 @@
             <div id="graphStatus" class="graph-status" aria-live="polite" hidden></div>
             <div id="legend" class="legend overlay" aria-label="Graph legend"></div>
             <div id="graphTooltip" class="graph-tooltip" role="tooltip" hidden></div>
+            <div id="watermark" class="watermark" aria-hidden="true">OmenHound</div>
             <aside id="pathDrawer" class="path-drawer" role="complementary" aria-label="Path Explorer" hidden>
               <div class="path-drawer-header">
                 <h2>Path Explorer</h2>
@@ -223,6 +227,7 @@
                 <button id="filterEdgeKind" class="chip-btn" title="Show only relationships of this type">⧩ Filter type</button>
               </div>
               <div id="edge-session-note" class="session-note" hidden></div>
+              <div id="edge-provenance" class="muted small"></div>
               <dl id="edge-props"></dl>
               <section class="abuse">
                 <h3>Dynamic Abuse Commands</h3>

@@ -8,8 +8,10 @@ import (
 )
 
 // Version is overridden via -ldflags at build time (see Makefile). It is the
-// value reported by "make build" / GoReleaser, i.e. the release tag.
-var Version = "dev"
+// value reported by "make build" / GoReleaser, i.e. the release tag. The
+// built-in default is the current OmenHound release line, so a plain
+// "go build" reports the real product version instead of a git pseudo-version.
+var Version = "4.1.01-omenhound"
 
 // String returns the best available version string. Precedence:
 //

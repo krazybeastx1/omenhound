@@ -190,6 +190,14 @@ func WriteScoped(ctx context.Context, st graph.Store, g *model.Graph, sc Scope, 
 	if mode == "" {
 		mode = ModeMerge
 	}
+	// Attribute the batch to a source automatically when the caller did not
+	// name one: the collector label distinguishes a native OmenHound collect
+	// ("ldap", "sample", …) from an imported BloodHound dataset
+	// ("bloodhound-import"), which is what lets the UI separate two datasets
+	// that describe the same domain.
+	if strings.TrimSpace(source) == "" {
+		source = strings.TrimSpace(g.Meta.Collector)
+	}
 	prev, planned, err := PlanScoped(g, sc)
 	if err != nil {
 		return ScopedResult{}, err

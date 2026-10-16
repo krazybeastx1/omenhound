@@ -224,7 +224,103 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes, "edges": edges})
+
+	// Attach ingestion provenance so the client can tell which collection
+	// source contributed each entity. Stores without provenance support simply
+	// return nodes/edges with no attribution.
+	nodeOuts := make([]graphNode, len(nodes))
+	for i, n := range nodes {
+		nodeOuts[i] = graphNode{Node: n}
+	}
+	edgeOuts := make([]graphEdge, len(edges))
+	for i, e := range edges {
+		edgeOuts[i] = graphEdge{Edge: e}
+	}
+
+	var nodeProv map[string]graph.EntityProvenance
+	var edgeProv map[string]graph.EntityProvenance
+	if p, ok := s.store.(graph.Provenance); ok {
+		if m, perr := p.NodeProvenance(r.Context()); perr == nil {
+			nodeProv = m
+		}
+		if m, perr := p.EdgeProvenance(r.Context()); perr == nil {
+			edgeProv = m
+		}
+	}
+	for i := range nodeOuts {
+		if p, ok := nodeProv[nodeOuts[i].ID]; ok {
+			nodeOuts[i].Sources = p.Sources
+			nodeOuts[i].Batches = p.Batches
+		}
+	}
+	for i := range edgeOuts {
+		if p, ok := edgeProv[graph.PublicEdgeKey(edgeOuts[i].Edge)]; ok {
+			edgeOuts[i].Sources = p.Sources
+			edgeOuts[i].Batches = p.Batches
+		}
+	}
+
+	resp := map[string]any{"nodes": nodeOuts, "edges": edgeOuts}
+	if im, ok := s.store.(graph.IngestManager); ok {
+		if batches, berr := im.ListBatches(r.Context()); berr == nil {
+			resp["datasets"] = batches
+		}
+	}
+	if summaries := summarizeSources(nodeProv, edgeProv); len(summaries) > 0 {
+		resp["sources"] = summaries
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// graphNode/graphEdge embed the canonical model and add the ingestion
+// attribution fields the UI needs. Embedding keeps every existing node/edge
+// field at the top level of the JSON object.
+type graphNode struct {
+	model.Node
+	Sources []string `json:"sources,omitempty"`
+	Batches []string `json:"batches,omitempty"`
+}
+
+type graphEdge struct {
+	model.Edge
+	Sources []string `json:"sources,omitempty"`
+	Batches []string `json:"batches,omitempty"`
+}
+
+// sourceSummary is the per-source node/edge count shown in the UI legend.
+type sourceSummary struct {
+	Name  string `json:"name"`
+	Nodes int    `json:"nodes"`
+	Edges int    `json:"edges"`
+}
+
+// summarizeSources aggregates provenance into per-source counts.
+func summarizeSources(np, ep map[string]graph.EntityProvenance) []sourceSummary {
+	agg := map[string]*sourceSummary{}
+	add := func(m map[string]graph.EntityProvenance, edges bool) {
+		for _, p := range m {
+			for _, s := range p.Sources {
+				a := agg[s]
+				if a == nil {
+					a = &sourceSummary{Name: s}
+					agg[s] = a
+				}
+				if edges {
+					a.Edges++
+				} else {
+					a.Nodes++
+				}
+			}
+		}
+	}
+	add(np, false)
+	add(ep, true)
+	out := make([]sourceSummary, 0, len(agg))
+	for _, a := range agg {
+		out = append(out, *a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // defaultPageLimit / maxPageLimit bound list endpoints so a large graph cannot

@@ -273,4 +273,58 @@ func TestClearResetsProvenance(t *testing.T) {
 	if s := statsOrFail(t, m); s.Nodes != 0 {
 		t.Fatalf("expected empty store, got %+v", s)
 	}
+	if np, _ := m.NodeProvenance(ctx); len(np) != 0 {
+		t.Fatalf("expected node provenance cleared, got %v", np)
+	}
+	if ep, _ := m.EdgeProvenance(ctx); len(ep) != 0 {
+		t.Fatalf("expected edge provenance cleared, got %v", ep)
+	}
+}
+
+func TestProvenanceAttributesSourcesPerEntity(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemory()
+	// Two datasets of the same domain: one native collect ("ldap"), one
+	// imported BloodHound dataset ("bloodhound-import"). They share u1.
+	b1 := &IngestBatch{ID: "b1", Source: "ldap", Mode: "merge", Domain: "corp.local", Status: "completed"}
+	b2 := &IngestBatch{ID: "b2", Source: "bloodhound-import", Mode: "merge", Domain: "corp.local", Status: "completed"}
+	if _, err := m.ApplyBatch(ctx, b1,
+		[]model.Node{node("u1", "corp.local"), node("u2", "corp.local")},
+		[]model.Edge{edge("u1", "u2", model.EdgeMemberOf)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ApplyBatch(ctx, b2,
+		[]model.Node{node("u1", "corp.local"), node("u3", "corp.local")},
+		[]model.Edge{edge("u1", "u3", model.EdgeGenericAll)}); err != nil {
+		t.Fatal(err)
+	}
+
+	np, err := m.NodeProvenance(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// u1 is shared: both sources, both batches.
+	if got := np["u1"].Sources; len(got) != 2 || got[0] != "bloodhound-import" || got[1] != "ldap" {
+		t.Fatalf("u1 sources = %v, want [bloodhound-import ldap]", got)
+	}
+	if got := np["u1"].Batches; len(got) != 2 || got[0] != "b1" || got[1] != "b2" {
+		t.Fatalf("u1 batches = %v, want [b1 b2]", got)
+	}
+	// u2 is solely from the native collect.
+	if got := np["u2"].Sources; len(got) != 1 || got[0] != "ldap" {
+		t.Fatalf("u2 sources = %v, want [ldap]", got)
+	}
+
+	ep, err := m.EdgeProvenance(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := PublicEdgeKey(edge("u1", "u2", model.EdgeMemberOf))
+	want := "u1|MemberOf|u2"
+	if key != want {
+		t.Fatalf("PublicEdgeKey = %q, want %q", key, want)
+	}
+	if got := ep[want].Sources; len(got) != 1 || got[0] != "ldap" {
+		t.Fatalf("edge sources = %v, want [ldap]", got)
+	}
 }

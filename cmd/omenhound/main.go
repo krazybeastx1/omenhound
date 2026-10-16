@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -44,7 +45,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `omenhound — BloodHound-style AD attack-path tool (Go)
 
 Usage:
-  omenhound collect [flags]     collect a graph and write Graph JSON
+  omenhound collect [collector] [flags]   collect a graph and write Graph JSON (collector: sample|ldap)
   omenhound import  [flags]     import BloodHound CE JSON/zip into Graph JSON
   omenhound serve   [flags]     run the ingestion API + web UI
   omenhound export  [flags]     convert a Graph JSON file (json|csv)
@@ -122,8 +123,32 @@ func cmdCollect(args []string) int {
 		outputPrefixLong = fs.String("outputprefix", "", "alias of --op")
 		out              = fs.String("out", "-", "output file, or - for stdout")
 	)
+	// The collector may be given as a bare first argument ("collect ldap
+	// --domain ...") as well as with --collector. Go's flag package stops
+	// parsing at the first non-flag token, so a leading "ldap" would otherwise
+	// cause every following flag to be ignored and silently fall back to the
+	// sample collector. Pull it off before parsing, and accept a trailing
+	// positional ("collect --domain ... ldap") too.
+	positionalCollector := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		positionalCollector, args = args[0], args[1:]
+	}
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		if len(rest) > 1 || positionalCollector != "" {
+			log.Printf("collect: unexpected argument(s) %q", rest)
+			return 2
+		}
+		positionalCollector = rest[0]
+	}
+	if positionalCollector != "" {
+		if flagSet(fs, "collector") {
+			log.Printf("collect: collector %q given both as an argument and via --collector", positionalCollector)
+			return 2
+		}
+		*collectorName = positionalCollector
 	}
 
 	domainVal := pick(*domain, *domainShort)
@@ -263,7 +288,9 @@ func cmdCollect(args []string) int {
 	if *zipOut {
 		path := *out
 		if path == "" || path == "-" || !flagSet(fs, "out") {
-			path = prefixVal + time.Now().UTC().Format("20060102150405") + ".zip"
+			path = exportBaseName(g, prefixVal, "zip")
+		} else if info, serr := os.Stat(path); serr == nil && info.IsDir() {
+			path = filepath.Join(path, exportBaseName(g, prefixVal, "zip"))
 		}
 		members, err := bloodhound.WriteCEZip(path, g, prefixVal)
 		if err != nil {
@@ -275,12 +302,51 @@ func cmdCollect(args []string) int {
 		return 0
 	}
 
-	if err := writeGraphFile(*out, g); err != nil {
+	outPath := *out
+	if outPath != "" && outPath != "-" {
+		if info, serr := os.Stat(outPath); serr == nil && info.IsDir() {
+			outPath = filepath.Join(outPath, exportBaseName(g, prefixVal, "json"))
+		}
+	}
+	if err := writeGraphFile(outPath, g); err != nil {
 		log.Printf("collect: %v", err)
 		return 1
 	}
-	log.Printf("collect: wrote %d nodes, %d edges to %s", len(g.Nodes), len(g.Edges), *out)
+	log.Printf("collect: wrote %d nodes, %d edges to %s", len(g.Nodes), len(g.Edges), outPath)
 	return 0
+}
+
+// exportBaseName builds a self-describing default file name so a native
+// OmenHound collect and an imported BloodHound dataset are never confused on
+// disk. It is "<prefix>_<collector>_<domain>_<UTC timestamp>.<ext>" with the
+// empty parts omitted, e.g. "ldap_htb.local_20261016T071035Z.json".
+func exportBaseName(g *model.Graph, prefix, ext string) string {
+	var parts []string
+	for _, p := range []string{prefix, g.Meta.Collector, g.Meta.Domain} {
+		if s := sanitizeFilePart(p); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	parts = append(parts, time.Now().UTC().Format("20060102150405"))
+	return strings.Join(parts, "_") + "." + ext
+}
+
+// sanitizeFilePart keeps names filesystem-safe without changing their meaning.
+func sanitizeFilePart(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
 }
 
 func pick(primary, alias string) string {
@@ -442,7 +508,7 @@ func cmdServe(args []string) int {
 			for _, w := range g.Meta.Warnings {
 				log.Printf("serve: WARNING: %s", w)
 			}
-			res, err := ingest.Write(ctx, store, g)
+			res, err := ingest.WriteScoped(ctx, store, g, ingest.Scope{}, ingest.ModeMerge, g.Meta.Collector)
 			if err != nil {
 				log.Printf("serve: ingest seed graph: %v", err)
 			} else {

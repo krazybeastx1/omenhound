@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -397,5 +398,57 @@ func TestPathsShortestEndpoint(t *testing.T) {
 	w = do(t, h, "GET", "/api/v1/paths/shortest?from=S&to=T&direction=outgoing&max_depth=5", "", nil)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"paths"`) {
 		t.Fatalf("GET paths = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGraphExposesIngestionSources(t *testing.T) {
+	ctx := context.Background()
+	st := graph.NewMemory()
+	// Two datasets of one domain: a native collect and an imported BloodHound
+	// dataset that share a node. They must be individually attributed.
+	if _, err := st.ApplyBatch(ctx, &graph.IngestBatch{ID: "b1", Source: "ldap", Mode: "merge", Domain: "corp.local", Status: "completed"},
+		[]model.Node{{ID: "u1", Kind: model.KindUser, Name: "u1"}, {ID: "u2", Kind: model.KindUser, Name: "u2"}},
+		[]model.Edge{{Source: "u1", Target: "u2", Kind: model.EdgeMemberOf}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApplyBatch(ctx, &graph.IngestBatch{ID: "b2", Source: "bloodhound-import", Mode: "merge", Domain: "corp.local", Status: "completed"},
+		[]model.Node{{ID: "u1", Kind: model.KindUser, Name: "u1"}, {ID: "u3", Kind: model.KindUser, Name: "u3"}},
+		[]model.Edge{{Source: "u1", Target: "u3", Kind: model.EdgeGenericAll}}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(Config{StoreIface: st, Version: "test", APIToken: "secret"}).Handler()
+	w := do(t, h, "GET", "/api/v1/graph", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("graph status = %d", w.Code)
+	}
+	var resp struct {
+		Nodes []struct {
+			ID      string   `json:"id"`
+			Sources []string `json:"sources"`
+		} `json:"nodes"`
+		Sources []struct {
+			Name  string `json:"name"`
+			Nodes int    `json:"nodes"`
+		} `json:"sources"`
+		Datasets []graph.IngestBatch `json:"datasets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode graph: %v (%s)", err, w.Body.String())
+	}
+	if len(resp.Datasets) != 2 {
+		t.Fatalf("datasets = %d, want 2", len(resp.Datasets))
+	}
+	if len(resp.Sources) != 2 {
+		t.Fatalf("source summaries = %+v, want 2", resp.Sources)
+	}
+	var shared []string
+	for _, n := range resp.Nodes {
+		if n.ID == "u1" {
+			shared = n.Sources
+		}
+	}
+	if len(shared) != 2 {
+		t.Fatalf("u1 sources = %v, want both datasets", shared)
 	}
 }

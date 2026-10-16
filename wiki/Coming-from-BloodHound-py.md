@@ -51,8 +51,9 @@ BloodHound.py, OmenHound never prompts — use `--password-stdin` or
 > forms), the `DOMAIN\user` / `user@domain` split, the SPN construction, the KDC
 > selection, the auth-method resolution and every refusal path are unit-tested. The
 > handshakes themselves — NTLMSSP, LDAP GSSAPI SASL and SMB Kerberos — are
-> **code-only**: no AD lab was available, so none has been exercised against a real
-> domain controller.
+> **code-only**: no AD lab was available for end-to-end Kerberos/NTLM handshakes.
+> Note: LDAP **simple bind** has been exercised against a live domain controller; other
+> auth modes (NTLM/Kerberos over LDAP/SMB) remain code-only.
 
 `--use-ldaps` and `-ns/--nameserver` (DC SRV discovery) behave as you expect.
 `--ldap-channel-binding` is accepted for parity and documented as a **no-op for simple

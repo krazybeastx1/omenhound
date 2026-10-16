@@ -162,6 +162,34 @@ type DomainCounter interface {
 	DomainCounts(ctx context.Context) (map[string]Stats, error)
 }
 
+// EntityProvenance attributes one node or edge to the ingestion sources and
+// batches that contributed it. Sources are the collector labels recorded on an
+// ingestion batch (e.g. "ldap" for a native OmenHound collect, "bloodhound-import"
+// for an imported BloodHound dataset); Batches are the opaque batch ids. Both
+// slices are sorted and deduplicated.
+type EntityProvenance struct {
+	Sources []string `json:"sources,omitempty"`
+	Batches []string `json:"batches,omitempty"`
+}
+
+// Provenance is implemented by stores that can attribute each entity to the
+// ingestion source(s) that contributed it. It lets the API and the UI separate
+// datasets that share SIDs — for example a native OmenHound collect and an
+// imported BloodHound collection of the same domain, which merge by identity.
+type Provenance interface {
+	// NodeProvenance returns node ID -> contributing sources/batches.
+	NodeProvenance(ctx context.Context) (map[string]EntityProvenance, error)
+	// EdgeProvenance returns "source|kind|target" -> contributing sources/batches.
+	EdgeProvenance(ctx context.Context) (map[string]EntityProvenance, error)
+}
+
+// PublicEdgeKey is the documented, UI-facing edge key "source|kind|target". It
+// matches the frontend's edgeKey() helper and is the key format returned by
+// Provenance.EdgeProvenance. Neither a SID nor an edge kind contains "|".
+func PublicEdgeKey(e model.Edge) string {
+	return e.Source + "|" + string(e.Kind) + "|" + e.Target
+}
+
 // planToken fingerprints a deletion scope so a confirmed deletion can prove the
 // graph has not changed since the preview was generated.
 func planToken(scope, target string, nodes, edges []string) string {

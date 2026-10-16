@@ -87,6 +87,33 @@ func SplitUserDomain(username, domain string) (user, dom string) {
 	return u, domain
 }
 
+// SimpleBindName normalizes a bind principal for an AD simple bind. LDAP simple
+// bind against AD expects a distinguished name or a userPrincipalName; the
+// tool-friendly "DNS-domain\user" form (e.g. "htb.local\svc-alfresco") and a
+// bare sAMAccountName are commonly rejected with LDAP error 49/data 52e. This
+// rewrites those into a UPN when the domain is DNS-style, and leaves NetBIOS
+// ("CORP\user"), explicit UPNs and DNs untouched.
+func SimpleBindName(username, domain string) string {
+	u := strings.TrimSpace(username)
+	if i := strings.IndexByte(u, '\\'); i >= 0 { // DOMAIN\user
+		dom := strings.TrimSpace(u[:i])
+		user := strings.TrimSpace(u[i+1:])
+		if strings.Contains(dom, ".") { // DNS style, not a valid NetBIOS name
+			return user + "@" + dom
+		}
+		return dom + "\\" + user
+	}
+	// An explicit UPN ("user@domain") or DN ("CN=...,DC=...") is already valid.
+	if strings.ContainsAny(u, "@=") {
+		return u
+	}
+	// A bare sAMAccountName only works as a UPN; use --domain when it is DNS.
+	if d := strings.TrimSpace(domain); strings.Contains(d, ".") {
+		return u + "@" + d
+	}
+	return u
+}
+
 // bindLDAP performs the configured bind on an established connection.
 func bindLDAP(conn *ldap.Conn, o Options) error {
 	method, err := o.EffectiveAuthMethod()
@@ -95,8 +122,9 @@ func bindLDAP(conn *ldap.Conn, o Options) error {
 	}
 	switch method {
 	case AuthSimple:
-		if err := conn.Bind(o.Username, string(o.Password)); err != nil {
-			return fmt.Errorf("ldap: simple bind as %q: %w", o.Username, err)
+		name := SimpleBindName(o.Username, o.Domain)
+		if err := conn.Bind(name, string(o.Password)); err != nil {
+			return fmt.Errorf("ldap: simple bind as %q: %w", name, err)
 		}
 		return nil
 

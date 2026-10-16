@@ -17,6 +17,31 @@ func graphOf(nodes []model.Node, edges []model.Edge) *model.Graph {
 	return &model.Graph{Nodes: nodes, Edges: edges}
 }
 
+func TestWriteScopedDefaultsSourceFromCollector(t *testing.T) {
+	ctx := context.Background()
+	st := graph.NewMemory()
+	g := graphOf([]model.Node{user("u1", "corp.local")}, nil)
+	g.Meta.Collector = "ldap"
+
+	// An empty source must fall back to the graph's collector label so the UI
+	// can attribute the batch to the tool that produced it.
+	res, err := WriteScoped(ctx, st, g, Scope{Domain: "corp.local"}, ModeMerge, "")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if res.Batch == nil || res.Batch.Source != "ldap" {
+		t.Fatalf("expected batch source ldap, got %+v", res.Batch)
+	}
+	// An explicit source always wins.
+	res2, err := WriteScoped(ctx, st, g, Scope{Domain: "corp.local"}, ModeMerge, "custom")
+	if err != nil {
+		t.Fatalf("write2: %v", err)
+	}
+	if res2.Batch == nil || res2.Batch.Source != "custom" {
+		t.Fatalf("expected batch source custom, got %+v", res2.Batch)
+	}
+}
+
 func TestPlanScopedUnscopedKeepsEverything(t *testing.T) {
 	g := graphOf(
 		[]model.Node{user("a", "corp.local"), user("b", "eng.local")},

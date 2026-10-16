@@ -16,7 +16,9 @@ canvas force graph embedded in the binary — no npm, no bundler, no CDN.
   `Container`, `Trust`); the legend is shown in the empty panel.
 - **Edges** are AD relationships. Node labels show `name / sAMAccountName / SID`.
 - **Drag** to pan, **scroll** to zoom, **drag a node** to move it.
-- The top bar shows `N nodes · M edges`.
+- The top bar shows `N nodes · M edges`, plus the number of loaded **sources** when a
+  graph merges more than one collection.
+- A single **OmenHound** watermark sits in the lower-right of the canvas.
 
 The toolbar is grouped by purpose:
 
@@ -25,9 +27,29 @@ The toolbar is grouped by purpose:
 | Navigation | zoom out/in, fit, reset, centre selection, re-run layout, show/hide Inspector |
 | Start & selection | **Start from…** picker, start/target chips, set start/target from selection, clear path highlight |
 | Search | find node (name / SAM / SID) |
-| Filtering | node-kind filter, relationship filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
+| Filtering | node-kind filter, relationship filter, **Source** filter, **Dataset** filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
 | Display | node labels, edge labels, arrows, legend |
 | Analysis | **Find Paths** between start and target, open **Path Explorer** from the starting node, toggle the route panel |
+
+### Datasets & sources (one collection at a time)
+
+Two collections of the same domain **merge by SID** — the same AD object collected
+twice is one node, not two. So the UI keeps each collection's origin visible:
+
+- The **dataset banner** above the graph lists the loaded collection **source(s)**
+  (e.g. `OmenHound · LDAP`, `BloodHound import`) with per-source node counts. Click a
+  source to **replace the view** with just that collection; when there are two or more,
+  a `◀ name n/N ▶` **stepper** walks them one at a time, and **All** returns to the merge.
+- The **Source** filter keeps only entities contributed by the chosen collection; the
+  **Dataset** filter keeps only entities from a single **ingestion batch**.
+- The legend adds a **Sources** section, and — whenever a merge is loaded — every node
+  gets a thin **source-coloured ring** (a split multi-colour ring when it belongs to
+  more than one collection).
+- The **Inspector** shows `contributed_by` and `ingestion_batches`; the edge panel shows
+  the collection that produced the relationship.
+
+Entities written by a plain (untracked) upsert have no provenance and appear only in
+the *All* view — the UI never guesses an origin it cannot prove.
 
 ## Starting node, selection and target
 

@@ -1,6 +1,7 @@
 # Binaries
 /omenhound
 /omenhoundd
+/cmd/omenhound/omenhound
 /bin/
 /dist/
 *.exe

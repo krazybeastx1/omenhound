@@ -1,6 +1,6 @@
 BINARY  := omenhound
 PKG     := github.com/krazybeastx1/omenhound
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= 4.1.01-omenhound
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
 # Where the NetExec module is installed. nxc loads user modules from

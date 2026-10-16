@@ -85,6 +85,23 @@ func TestSplitUserDomain(t *testing.T) {
 	}
 }
 
+func TestSimpleBindName(t *testing.T) {
+	cases := []struct{ user, domain, want string }{
+		{`htb.local\svc-alfresco`, "htb.local", "svc-alfresco@htb.local"},
+		{`CORP\jdoe`, "corp.local", `CORP\jdoe`},
+		{"jdoe", "corp.local", "jdoe@corp.local"},
+		{"jdoe@corp.local", "corp.local", "jdoe@corp.local"},
+		{"CN=jdoe,CN=Users,DC=corp,DC=local", "corp.local", "CN=jdoe,CN=Users,DC=corp,DC=local"},
+		{"jdoe", "CORP", "jdoe"},
+		{"  htb.local\\svc-alfresco  ", "htb.local", "svc-alfresco@htb.local"},
+	}
+	for _, tc := range cases {
+		if got := SimpleBindName(tc.user, tc.domain); got != tc.want {
+			t.Errorf("SimpleBindName(%q,%q) = %q, want %q", tc.user, tc.domain, got, tc.want)
+		}
+	}
+}
+
 func TestValidateOptionsAuth(t *testing.T) {
 	base := Options{Server: "dc01", Domain: "corp.local", Username: "jdoe", UseLDAPS: true}
 

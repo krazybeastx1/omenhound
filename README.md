@@ -69,7 +69,8 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 omenhound version
 ```
 
-Pin an exact release with `@v0.1.0` (any published tag works). Each
+Pin an exact release with `@v0.4.0` (any published tag works), or build the
+in-development `4.1.01-omenhound` tree from source. Each
 [release](https://github.com/krazybeastx1/omenhound/releases) also ships prebuilt
 linux/macOS/Windows tarballs — with `checksums.txt` — for hosts without a Go
 toolchain.
@@ -97,7 +98,7 @@ OmenHound is a Go implementation of the BloodHound CE model:
 | **Collector** (`omenhound collect`) | Enumerates AD over **LDAPS** (users, groups, computers, membership; `-c acl` object security descriptors → ACL edges; `-c container` OUs/GPOs/containers → `Contains`/`GPLink`; `-c trusts` → `TrustedBy`) and over **SMB/RPC** (`-c session`/`localadmin`/`rdp`/`dcom`/`psremote`/`loggedon` → `HasSession`/`AdminTo`/`CanRDP`/`ExecuteDCOM`/`CanPSRemote`), emitting a graph. Simple bind, NTLM and pass-the-hash (LDAPS recommended); BloodHound.py-compatible flags; `--zip` writes a real **BloodHound CE v5 archive**. |
 | **Importer** (`omenhound import`) | Reads **BloodHound CE JSON** and **`bloodhound-ce-python --zip`** archives into Graph JSON — or straight into a running server. SIDs/GUIDs kept verbatim; unmappable rights reported, never fabricated. |
 | **Graph backend** | Stores nodes/edges in **Neo4j** using the **BloodHound CE schema**, so existing BloodHound Cypher queries work. An in-memory store is used for tests and demos. |
-| **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. Ingest can be **merge** (default) or **replace**, can be **scoped to one domain** (rejecting foreign domains rather than mixing them), and is tracked as **batches**. The UI previews an import, lists batch/domain history, and offers **scoped deletion** by batch or domain with a preview-and-confirm workflow, plus a global delete so you can work with one dataset at a time. |
+| **Ingestion API + UI** (`omenhound serve`) | Go HTTP service that ingests graphs and serves a dependency-free web UI with a force-directed graph view. Ingest can be **merge** (default) or **replace**, can be **scoped to one domain** (rejecting foreign domains rather than mixing them), and is tracked as **batches** with **per-entity provenance** — every node and edge records which collection **source** and **batch** contributed it, so two datasets that describe the same domain (a native OmenHound collect plus an imported BloodHound collection) stay individually filterable instead of merging into one indistinguishable blob. The UI previews an import, lists batch/domain history, offers a **Source** and **Dataset** filter, and supports **scoped deletion** by batch or domain with a preview-and-confirm workflow, plus a global delete so you can work with one dataset at a time. |
 | **Dynamic abuse engine** | For every edge, renders a copy-pasteable abuse command by interpolating **real node properties**, with a per-technique **OPSEC/detection note** and Windows event IDs. |
 | **Attack-path analytics** | Fourteen canned, documented queries (Kerberoastable, AS-REP roastable, DCSync, LAPS, delegation, AdminTo, high-value, adminCount, owned…) answered over the current graph at `/api/v1/analytics`, with an **Attack Paths** view in the UI. Each result lists the exact property/relationship that matched, and a zero result says so when the underlying attribute was never collected. |
 | **Gated credential ops** | Optional, off-by-default ability to change an AD password over LDAPS (`unicodePwd`), behind token + explicit-approval + audit gates. |
@@ -111,6 +112,141 @@ bloodyAD --host DC.omenhound.lab -d omenhound.lab -u jdoe -p '<password>' set pa
 ```
 
 — with the real sAMAccountName, DN, and domain from *your* graph.
+
+---
+
+## New to OmenHound? Start here
+
+If you have never run an AD attack-path tool before, this is the shortest path
+from zero to a readable graph. Everything runs locally against a throwaway
+`sample` domain first, so you need no domain controller and no credentials.
+
+**1. Get the binary.**
+
+```bash
+git clone git@github.com:krazybeastx1/omenhound.git
+cd omenhound
+make build          # -> bin/omenhound
+./bin/omenhound version      # -> omenhound 4.1.01-omenhound
+```
+
+**2. Collect something.** The `sample` collector emits a fixed fake domain:
+
+```bash
+./bin/omenhound collect sample --out sample.json
+```
+
+`--out` accepts a **directory**: if you point it at a folder (not a file), the
+collector writes a self-describing name like `ldap_htb.local_20261016T071035Z.json`
+so a native collect is never confused with anything else on disk.
+
+**3. Serve it and look at it.**
+
+```bash
+./bin/omenhound serve --collector sample --addr 127.0.0.1:8080
+# open http://127.0.0.1:8080
+```
+
+**4. Read the graph.** Each dot is an AD object: blue = user, orange = group,
+green = computer, purple = domain. Lines are relationships — `MemberOf` (group
+membership), `GenericAll` (full control), `AdminTo`, `HasSession`, and so on.
+Click a node to open the **Inspector** on the right; click a relationship line to
+see a ready-made abuse command plus a read-only verification step.
+
+**5. Understand what you are looking at.** The thin strip above the graph is the
+**dataset banner**. It names the collection **source(s)** currently loaded (for
+example `OmenHound · LDAP` versus `BloodHound import`). Two collections of the
+same domain merge by SID — the same object from two runs is one node, not two —
+so the banner and the **Source** filter are how you keep them straight.
+
+**6. Common first-run problems.**
+
+| Symptom | Cause / fix |
+|---|---|
+| `collect` says it fell back to the `sample` collector | The collector was passed as a flag after a positional token. Put it **first** — `omenhound collect ldap …` — or use `--collector ldap`. |
+| `data 52e: Invalid Credentials` on a simple bind | Use the principal form your server expects. OmenHound normalizes `DNS-domain\user` and a bare `username` to `user@domain` automatically; `NETBIOS\user`, UPNs and DNs are passed through untouched. |
+| An empty graph after loading a file | The file may have been ingested but the browser cached the old UI. Reload with `Ctrl-Shift-R`; the server already sends `Cache-Control: no-store`. |
+| `Write API` button stays locked 🔒 | Ingest requires `--api-token` on `serve`. Start it with one and paste the token into the gate. |
+| The graph is a hairball | Use the **Source** / **Dataset** / node-kind / relationship filters, or select a node and press **isolate**. The layout already groups objects loosely by type. |
+
+---
+
+## Structural walkthrough
+
+This is the whole system in one pass: what happens between typing a command and
+seeing a graph in the browser.
+
+```
+                       ┌──────────────────────────────────────────────┐
+  omenhound collect ──▶│ collector (ldap | sample)                    │
+                       │  binds to AD, walks LDAP/SMB, builds a Graph │
+                       └───────────────┬──────────────────────────────┘
+                                       │  Graph JSON  (nodes, edges, meta)
+                                       ▼
+                       ┌──────────────────────────────────────────────┐
+  omenhound import ───▶│ ingest  (internal/ingest)                    │
+  (BloodHound zip/JSON)│  validates vocabulary + referential integrity│
+                       └───────────────┬──────────────────────────────┘
+                                       │  WriteScoped: PlanScoped → ApplyBatch
+                                       ▼
+                       ┌──────────────────────────────────────────────┐
+  omenhound serve ────▶│ Store  (internal/graph)                      │
+                       │  memory: + batches & per-entity provenance   │
+                       │  neo4j : BloodHound CE schema                │
+                       └───────────────┬──────────────────────────────┘
+                                       │
+             ┌─────────────────────────┼───────────────────────────┐
+             ▼                         ▼                           ▼
+      api (HTTP)               abuse engine                 analytics
+   /api/v1/graph, …        edge → Read + Add command     canned queries
+             │
+             ▼
+     web UI  (embedded canvas force graph, no CDN)
+```
+
+**Step 1 — collection.** `internal/collector` defines the `Collector` interface
+and two implementations: `ldap` (real AD over LDAP/LDAPS, plus optional SMB/RPC
+passes) and `sample` (deterministic offline data). The result is a
+`model.Graph`: `Nodes`, `Edges`, and `Meta` (collector name, version, domain,
+timestamps). Identity is the AD SID (or objectGUID), never a display name.
+
+**Step 2 — validation and writing.** `internal/ingest` is the only package that
+turns a `Graph` into store writes. `PlanScoped` validates vocabulary and
+referential integrity (`every edge endpoint exists`) and applies the domain
+scope; `WriteScoped` then writes the plan and, if the store supports
+provenance, records an **`IngestBatch`** carrying the batch id and its
+**source**. `omenhound collect` writes Graph JSON to a file; `omenhound import`
+converts BloodHound CE JSON/archives into the same shape; both send the same
+`Graph` to `serve` when used with `--api`.
+
+**Step 3 — storage.** `internal/graph` defines the `Store` interface with two
+backends. The in-memory store keeps `nodes`, `edges`, the `batches` map, and a
+per-entity provenance index (`nodeProv` / `edgeProv` → batch ids). Neo4j uses the
+BloodHound CE schema; it does not implement the batch/provenance interfaces, so
+the API degrades gracefully (no source filter, and scoped deletion reports
+"unavailable" rather than guessing).
+
+**Step 4 — reading.** `internal/api` exposes `/api/v1/graph`, which returns every
+node and edge with its `sources` and `batches` attached, plus a top-level
+`sources` summary (counts per collection source) and `datasets` (the ingestion
+batches). Other endpoints cover stats, search, neighbours, paths, abuse commands
+and analytics — all under `/api/v1`.
+
+**Step 5 — the UI.** `web/static` is plain HTML/CSS/JS embedded into the binary
+with `go:embed` (no build step, no CDN). `app.js` loads `/api/v1/graph`, builds
+the adjacency index, runs the force layout, and renders the Inspector, legend,
+dataset banner and the **Source**/**Dataset** filters.
+
+| Directory | Responsibility |
+|---|---|
+| `cmd/omenhound` | CLI entry point: `collect`, `import`, `serve`, `export`, `version`. |
+| `pkg/model` | Node/edge vocabulary, `Graph`, `Meta`, SID-keyed identity. |
+| `internal/collector` | `Collector` interface; `ldap`, `sample`, SMB/RPC probes. |
+| `internal/ingest` | Validate + scope + write graphs; batch provenance. |
+| `internal/graph` | `Store` interface; `memory` and `neo4j` backends; provenance index. |
+| `internal/api` | HTTP endpoints, auth, static UI, gated writes. |
+| `internal/abuse` | Edge → dynamic Read/Add command + OPSEC templates. |
+| `web` | Embedded static UI (`web/static`), no build step. |
 
 ---
 
@@ -150,6 +286,14 @@ Or in one shot: `make run-sample`.
 
 ```bash
 export OMENHOUND_PASSWORD='...'          # avoid --password on the CLI
+
+# The collector can be a positional argument...
+./bin/omenhound collect ldap \
+  --domain htb.local --server dc01.htb.local \
+  --username 'htb.local\svc-alfresco' --password-stdin \
+  --allow-plaintext-ldap --out omenhound_ldap_htb_local.json
+
+# ...or a flag. Both forms are equivalent.
 ./bin/omenhound collect \
   --collector ldap \
   --domain corp.local --server dc01.corp.local \
@@ -161,6 +305,26 @@ curl -sS -X POST http://127.0.0.1:8080/api/v1/ingest \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN" \
   --data-binary @corp.json
 ```
+
+> **Collector as a positional argument.** `omenhound collect ldap …` is the
+> recommended form. Go's `flag` package stops parsing flags at the first
+> non-flag token, so a collector placed *after* a positional value would be
+> silently ignored — which is why the collector belongs immediately after
+> `collect`. Using `--collector ldap` anywhere still works.
+
+**Bind principal.** Simple bind normalizes `DNS-domain\user` and a bare
+`username` to the UPN `user@domain` when the domain contains a dot; a NetBIOS
+`CORP\user`, a full UPN, and a DN are passed through unchanged. This avoids the
+common `data 52e: Invalid Credentials` caused by sending `domain\user` where the
+server wants `user@domain`.
+
+**File names describe themselves.** With `--out` pointing at a directory (or
+omitted for `--zip`), the collector writes
+`<prefix>_<collector>_<domain>_<timestamp>.<ext>` — e.g.
+`ldap_htb.local_20261016T071035Z.json` or, for an import,
+`bloodhound-import_HTB.LOCAL_20261016T071035Z.json`. The `meta.collector` field
+inside the graph carries the same label, so a native OmenHound collect and an
+imported BloodHound dataset are distinguishable both on disk and in the UI.
 
 By default an ingest **merges** into whatever the server already holds. An ingest can be
 **scoped to one domain** (`?domain=corp.local`) so a multi-domain file cannot silently
@@ -187,8 +351,10 @@ curl -sS -X DELETE "http://127.0.0.1:8080/api/v1/graph?confirm=true" \
   -H "Authorization: Bearer $OMENHOUND_API_TOKEN"
 ```
 
-Imports are tracked as **ingestion batches** (id, source file, selected domain, timestamp,
-status, created/updated/skipped counts). The web UI's **Ingestion Management** tab lists
+Imports are tracked as **ingestion batches** (id, source, selected domain, timestamp,
+status, created/updated/skipped counts), where the **source** defaults to the graph's
+`meta.collector` (e.g. `ldap` for a native collect, `bloodhound-import` for an imported
+dataset). The web UI's **Ingestion Management** tab lists
 that history, and offers **scoped deletion** by batch or by domain: it previews exactly
 which nodes and relationships would be removed and which are **preserved** because another
 import shares them, then deletes only after you confirm (a domain deletion requires typing
@@ -218,9 +384,59 @@ by purpose:
 | Navigation | zoom out/in, fit to view, reset view, center selection, re-run layout, show/hide Inspector |
 | Start & selection | **Start from…** picker, start/target chips, set start/target from the selection, clear path highlight |
 | Search | find node (name / SAM / SID) |
-| Filtering | node-kind filter, relationship filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
+| Filtering | node-kind filter, relationship filter, **Source** filter, **Dataset** filter, **Sessions only**, isolate, hide unrelated edges, clear selection |
 | Display | node labels, edge labels, directional arrows, legend |
 | Analysis | **Find Paths** between the start and target, open **Path Explorer** from the starting node, toggle the route panel |
+
+### Datasets & sources (telling collections apart)
+
+Two collections of the same domain **merge by SID**: the same AD object collected
+twice is one node, not two. That is correct for identity, but it means a native
+OmenHound collect and an imported BloodHound collection look like one graph
+unless the UI keeps their origin visible. It does:
+
+* The **dataset banner** above the graph names the loaded collection **source(s)**
+  (e.g. `OmenHound · LDAP`, `BloodHound import`) with per-source node/edge counts,
+  and links to *view only* one of them.
+* The **Source** filter keeps only entities contributed by the chosen collection;
+  the **Dataset** filter keeps only entities from one ingestion **batch**.
+* The legend lists the sources with a colour per source.
+* The **Inspector** shows `contributed_by` and `ingestion_batches` for a node, and
+  the edge panel shows the collection that produced the relationship.
+
+A node present in both datasets lists both sources. Entities written by a plain
+(untracked) upsert have no provenance and appear only in the *All* view — the UI
+never guesses an origin it cannot prove.
+
+**Which JSON is which?** A native OmenHound collect and a `bloodhound-ce-python`
+export are different tools producing different files. Name them so the difference
+is obvious on disk, and the batch/source list and graph make it obvious in the UI:
+
+```bash
+# Native OmenHound collect  ->  omenhound_ldap_htb_local.json
+omenhound collect ldap -d htb.local -ns 10.129.83.58 \
+  -u 'htb.local\svc-alfresco' --password-stdin --allow-plaintext-ldap \
+  --out omenhound_ldap_htb_local.json
+
+# BloodHound CE export (zip) ->  bloodhound_import_htb_local.json
+omenhound import --in 20261016025804_bloodhound.zip \
+  --out bloodhound_import_htb_local.json
+```
+
+| | Native OmenHound collect | BloodHound / `bloodhound-ce-python` import |
+|---|---|---|
+| Made by | `omenhound collect ldap …` | `bloodhound-ce-python … --zip`, then `omenhound import` |
+| Example file | `omenhound_ldap_htb_local.json` | `bloodhound_import_htb_local.json` |
+| Wire format | OmenHound **Graph JSON** (`nodes`/`edges`/`meta`) | BloodHound CE JSON (zipped), converted on import |
+| `meta.collector` | `ldap` | `bloodhound-import` |
+| UI source label | `OmenHound · LDAP` | `BloodHound import` |
+| Identity | SID / objectGUID | SID / objectGUID (kept verbatim) |
+| Typical coverage | membership; optional `-c acl,container,trusts` and SMB passes | often full ACLs, sessions, GPO links |
+
+Both describe the same domain and merge by SID, so the file name is a convention,
+while `meta.collector` and the ingestion-batch **source** are the authoritative
+signals the UI reads. The **Source** stepper (below) shows one collection at a
+time, so the two graphs never overlap into one bulk.
 
 Three entity roles are kept deliberately separate and are never inferred from
 one another:
@@ -291,9 +507,11 @@ Keyboard (ignored while typing): `f` fit, `r` reset, `c` centre selection,
 them (`-c session` / `loggedon` over SMB) or an imported dataset that contains
 `HasSession`. Credential evidence requires an importer that emits the `cred.*`
 namespace; the shipped collectors do not. There is no session/credential schema in
-the graph store beyond optional node properties, and the read API does not persist
-collection-run metadata, so per-entity provenance is limited to the entity’s own
-stable identifiers (SID, or objectGUID when no SID exists).
+the graph store beyond optional node properties. Per-entity **provenance** — which
+collection source and ingestion batch contributed a node or edge — *is* persisted
+and exposed by `/api/v1/graph` on a provenance-tracking store, but the canonical
+entity identity remains the entity’s own stable identifier (the AD SID, or
+objectGUID when no SID exists).
 
 ---
 
@@ -382,12 +600,16 @@ Full option table and details: **[contrib/nxc/README.md](contrib/nxc/README.md)*
 ## CLI
 
 ```
-omenhound collect [flags]     # run a collector, write Graph JSON (or a CE zip)
-omenhound import  [flags]     # import BloodHound CE JSON/zip into Graph JSON
-omenhound serve   [flags]     # ingestion API + web UI
-omenhound export  [flags]     # convert a Graph JSON (json | csv)
+omenhound collect [collector] [flags]   # run a collector, write Graph JSON (or a CE zip)
+omenhound import  [flags]               # import BloodHound CE JSON/zip into Graph JSON
+omenhound serve   [flags]               # ingestion API + web UI
+omenhound export  [flags]               # convert a Graph JSON (json | csv)
 omenhound version
 ```
+
+The collector may be passed as the first positional argument (`omenhound collect
+ldap …`) or with `--collector ldap`; the flag form still works. The positional form
+is recommended because Go's `flag` parser stops at the first non-flag token.
 
 Key flags: `--collector sample|ldap`, `--domain`, `--server`, `--ldaps`,
 `--base-dn`, `--username`, `--password-stdin`, `--neo4j-uri`, `--api-token`,
@@ -546,7 +768,9 @@ domain or a database.
 - [x] BloodHound.py-compatible collection flags, method planning, SRV DC discovery
 - [x] Token-gated write API in the web UI
 - [x] ACL (`nTSecurityDescriptor`) → `Owns`/`GenericAll`/`WriteDacl`/`GetChanges`/… edges
-      *(parser and ACE mapping unit-tested against impacket-generated descriptors; the live LDAP path is code-only — no AD lab)*
+      *(parser and ACE mapping unit-tested against impacket-generated descriptors; LDAP
+      collection — including the simple bind against a live domain controller — has since
+      been validated end to end)*
 - [x] OU / GPO / container → `Contains` + `GPLink`, and domain trusts → `TrustedBy`
 - [x] SMB sessions & local groups (`HasSession`, `AdminTo`, `CanRDP`, `ExecuteDCOM`,
       `CanPSRemote`) — `-c session,localadmin,rdp,dcom,psremote,loggedon`

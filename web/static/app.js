@@ -26,6 +26,42 @@ const COLORS = {
   Base: "#8b9ab8",
 };
 
+// Stable colours and friendly labels for ingestion sources. A source is the
+// collector label recorded when a dataset was ingested ("ldap" for a native
+// OmenHound collect, "bloodhound-import" for an imported BloodHound dataset).
+// Known labels get a fixed hue; anything else is hashed into the palette so two
+// datasets never share a colour by accident.
+const SOURCE_COLORS = {
+  ldap: "#00d4ff",
+  sample: "#8b9ab8",
+  "bloodhound-import": "#ff6b35",
+  bloodhound: "#ff6b35",
+  azurehound: "#b873ff",
+  soaphound: "#ff3d7f",
+  "sharp-hound": "#ffd600",
+  adexplorer: "#00ffc8",
+};
+const SOURCE_PALETTE = ["#00d4ff", "#ff6b35", "#00ff88", "#b873ff", "#ffd600", "#4ecdc4", "#ff8c42", "#ff3d7f"];
+
+function sourceLabel(name) {
+  const map = {
+    ldap: "OmenHound · LDAP",
+    sample: "OmenHound · sample",
+    "bloodhound-import": "BloodHound import",
+    bloodhound: "BloodHound",
+    azurehound: "AzureHound import",
+    soaphound: "SoaPHound import",
+  };
+  return map[name] || name || "unattributed";
+}
+
+function sourceColor(name) {
+  if (SOURCE_COLORS[name]) return SOURCE_COLORS[name];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return SOURCE_PALETTE[h % SOURCE_PALETTE.length];
+}
+
 // Edge categories group BloodHound relationship types into a small, readable
 // legend. Colors mirror the CSS --edge-* variables.
 const EDGE_CATEGORIES = {
@@ -79,14 +115,16 @@ const DEFAULT_PREFS = {
 // bounds how far a node may move per iteration and cools to 0 when the layout
 // settles, at which point the animation loop stops entirely.
 const LAYOUT = {
-  ideal: 78,        // ideal edge length / node spacing
-  cutoffMul: 9,     // approximate repulsion cutoff = ideal * cutoffMul
+  ideal: 92,        // ideal edge length / node spacing
+  cutoffMul: 10,    // approximate repulsion cutoff = ideal * cutoffMul
   cooling: 0.985,   // temperature decay per iteration
   minTemp: 0.4,     // below this the simulation is considered stable
   maxIter: 3,       // simulation iterations per animation frame
-  settleIters: 450, // fast-forward iterations on load / re-layout
+  settleIters: 500, // fast-forward iterations on load / re-layout
   gravity: 0.008,   // pull toward origin so components do not drift apart
-  collidePad: 12,   // extra world units kept between node discs
+  collidePad: 20,   // extra world units kept between node discs
+  cluster: 0.010,   // pull same-kind nodes into loose groups (structure, not a blob)
+  collidePasses: 2, // collision-relaxation sweeps per iteration
 };
 
 // Base radius per node kind (world units), scaled by degree in loadGraph.
@@ -152,6 +190,14 @@ let currentDomain = "";
 let operatorToken = null;
 let refreshTimer = null;
 let statsCache = null;
+
+// Ingestion provenance for the loaded graph: which collection source(s) and
+// ingestion batch(es) contributed each node/edge. Two datasets that describe
+// the same domain (e.g. a native OmenHound collect and an imported BloodHound
+// collection) merge into one graph by SID, so this is what lets the UI tell
+// them apart and view one at a time.
+let currentSources = [];   // [{name, nodes, edges}]
+let currentDatasets = [];  // ingestion batches: {id, source, domain, mode, created_at, …}
 
 const tableState = {};
 
@@ -340,10 +386,22 @@ function nodeHasSession(id) {
   return rec.out.some((e) => e.kind === SESSION_EDGE) || rec.in.some((e) => e.kind === SESSION_EDGE);
 }
 
+// True when an entity passes the active Source and Dataset filters. An entity
+// with no provenance only matches the "All" view, so an untracked file never
+// masquerades as a tracked dataset.
+function passesProvenance(entity) {
+  const src = val("sourceFilter");
+  if (src && !(entity.sources || []).includes(src)) return false;
+  const ds = val("datasetFilter");
+  if (ds && !(entity.batches || []).includes(ds)) return false;
+  return true;
+}
+
 function edgeHidden(e) {
   const ek = val("edgeKindFilter");
   if (ek && e.kind !== ek) return true;
   if (sessionsOnly && e.kind !== SESSION_EDGE) return true;
+  if (!passesProvenance(e)) return true;
   const a = byId.get(e.source);
   const b = byId.get(e.target);
   if ((a && nodeHidden(a)) || (b && nodeHidden(b))) return true;
@@ -386,6 +444,11 @@ async function loadGraph() {
     byId = new Map(nodes.map((n) => [n.id, n]));
     edges = edges.filter((e) => byId.has(e.source) && byId.has(e.target));
 
+    // Ingestion provenance for this load: which sources/batches contributed
+    // each entity, plus the source and dataset summaries the UI filters on.
+    currentSources = g.sources || [];
+    currentDatasets = g.datasets || [];
+
     buildAdjacency();
 
     // Size nodes by degree so hubs stand out, and re-heat the simulation.
@@ -397,11 +460,15 @@ async function loadGraph() {
     temp = Math.max(40, (canvas ? canvas.clientWidth : 900) / 7);
 
     const statsEl = document.getElementById("stats");
-    if (statsEl) statsEl.textContent = `${nodes.length} nodes · ${edges.length} edges`;
+    if (statsEl) {
+      const srcNote = currentSources.length > 1 ? ` · ${currentSources.length} sources` : "";
+      statsEl.textContent = `${nodes.length} nodes · ${edges.length} edges${srcNote}`;
+    }
 
     renderLegend();
     populateFilters();
     populatePathOptions();
+    renderDatasetBanner();
 
     if (!nodes.length) {
       setGraphStatus("empty", "No graph data yet", "Ingest a Graph JSON file from the Ingestion page.");
@@ -472,8 +539,88 @@ function renderLegend() {
   if (cats.length && prefs.arrows) {
     html += `<span class="legend-group">Direction</span><span class="edge-legend"><i class="legend-arrow"></i>source → target</span>`;
   }
+  if (currentSources.length > 1) {
+    html += `<span class="legend-group">Sources</span>`;
+    html += currentSources.map((s) =>
+      `<span class="legend-source"><i style="background:${sourceColor(s.name)}"></i>${esc(sourceLabel(s.name))} <span class="count">${s.nodes}</span></span>`
+    ).join("");
+  }
   legendEl.innerHTML = html;
   legendEl.classList.toggle("visible", !!prefs.legend && nodes.length > 0);
+}
+
+// Banner that names the dataset(s) currently loaded and lets you step through
+// them one at a time. Two collections of the same domain merge by SID, so a
+// single click here *replaces* the displayed graph with one collection — the
+// sources never overlap into one bulk.
+function renderDatasetBanner() {
+  const el = document.getElementById("datasetBanner");
+  if (!el) return;
+  const srcs = currentSources || [];
+  const ds = currentDatasets || [];
+  if (!srcs.length && !ds.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const active = val("sourceFilter");
+  const chipFor = (s) =>
+    `<button type="button" class="dataset-chip source-chip${active === s.name ? " active" : ""}" data-source="${esc(s.name)}" title="Replace the view with ${esc(sourceLabel(s.name))}">` +
+    `<i style="background:${sourceColor(s.name)}"></i>${esc(sourceLabel(s.name))} <span class="count">${s.nodes}</span></button>`;
+  const chips = srcs.map(chipFor).join(" ");
+
+  let stepper = "";
+  if (srcs.length > 1) {
+    const idx = srcs.findIndex((s) => s.name === active);
+    const cur = idx === -1 ? null : srcs[idx];
+    stepper =
+      `<span class="source-stepper" role="group" aria-label="Step through collections one at a time">` +
+      `<button type="button" class="icon-btn" id="sourcePrev" title="Previous collection" aria-label="Previous collection">◀</button>` +
+      `<span class="stepper-label">${cur ? esc(sourceLabel(cur.name)) : "All sources"} <span class="count">${cur ? idx + 1 : 0}/${srcs.length}</span></span>` +
+      `<button type="button" class="icon-btn" id="sourceNext" title="Next collection" aria-label="Next collection">▶</button>` +
+      `<button type="button" class="chip-btn" id="sourceAll"${active ? "" : " disabled"}>All</button>` +
+      `</span>`;
+  }
+  const dsInfo = ds.length
+    ? `<span class="dataset-label">Datasets</span><span class="dataset-chip">${ds.length} batch${ds.length === 1 ? "" : "es"} <button type="button" class="link-node" id="openIngestMgmt">manage</button></span>`
+    : "";
+
+  el.innerHTML = `<span class="dataset-label">Source view</span>${chips}` +
+    (stepper ? " · " + stepper : "") +
+    (dsInfo ? " · " + dsInfo : "") +
+    `<span class="muted small">Merged by SID — click a source (or step) to view one collection at a time.</span>`;
+
+  for (const b of el.querySelectorAll(".source-chip")) {
+    b.addEventListener("click", () => setSourceView(active === b.dataset.source ? "" : b.dataset.source));
+  }
+  const prev = document.getElementById("sourcePrev");
+  if (prev) prev.addEventListener("click", () => stepSource(-1));
+  const next = document.getElementById("sourceNext");
+  if (next) next.addEventListener("click", () => stepSource(1));
+  const all = document.getElementById("sourceAll");
+  if (all) all.addEventListener("click", () => setSourceView(""));
+  const mgmt = document.getElementById("openIngestMgmt");
+  if (mgmt) mgmt.addEventListener("click", () => { location.hash = "#/ingestion"; });
+}
+
+// Replace the displayed graph with a single collection source (one click),
+// or with every source when name is empty.
+function setSourceView(name) {
+  const sel = document.getElementById("sourceFilter");
+  if (sel) sel.value = name || "";
+  applyFilters();
+  fitView();
+  renderDatasetBanner();
+  toast(name ? `Viewing only: ${sourceLabel(name)}` : "Viewing all sources", "info");
+}
+
+// Step to the previous/next collection, wrapping around. Stepping from the
+// "All" view enters the list at the first (forward) or last (backward) source.
+function stepSource(delta) {
+  const srcs = currentSources || [];
+  if (!srcs.length) return;
+  const active = val("sourceFilter");
+  let i = srcs.findIndex((s) => s.name === active);
+  if (i === -1) i = delta > 0 ? -1 : 0;
+  const ni = (i + delta + srcs.length) % srcs.length;
+  setSourceView(srcs[ni].name);
 }
 
 function populateFilters() {
@@ -490,6 +637,28 @@ function populateFilters() {
     const kinds = [...new Set(edges.map((e) => e.kind))].sort();
     edgeKindFilter.innerHTML = '<option value="">All Relationships</option>' + kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join("");
     if (kinds.indexOf(cur) !== -1) edgeKindFilter.value = cur;
+  }
+  const sourceFilter = document.getElementById("sourceFilter");
+  if (sourceFilter) {
+    const cur = sourceFilter.value;
+    const names = currentSources.map((s) => s.name).sort();
+    sourceFilter.innerHTML = '<option value="">All Sources</option>' +
+      names.map((n) => `<option value="${esc(n)}">${esc(sourceLabel(n))}</option>`).join("");
+    sourceFilter.disabled = names.length === 0;
+    if (names.indexOf(cur) !== -1) sourceFilter.value = cur; else sourceFilter.value = "";
+  }
+  const datasetFilter = document.getElementById("datasetFilter");
+  if (datasetFilter) {
+    const cur = datasetFilter.value;
+    const ds = (currentDatasets || []).slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    datasetFilter.innerHTML = '<option value="">All Datasets</option>' +
+      ds.map((d) => {
+        const when = d.created_at ? new Date(d.created_at).toLocaleString() : "";
+        const label = `${sourceLabel(d.source)} · ${d.domain || "all domains"} · ${d.id}${when ? " · " + when : ""}`;
+        return `<option value="${esc(d.id)}">${esc(label)}</option>`;
+      }).join("");
+    datasetFilter.disabled = ds.length === 0;
+    if (ds.some((d) => d.id === cur)) datasetFilter.value = cur; else datasetFilter.value = "";
   }
 }
 
@@ -570,6 +739,26 @@ function step() {
     out.y -= node.y * LAYOUT.gravity * k;
   }
 
+  // 3b. gentle grouping by node kind. Without it, an ACL-dense domain (hundreds
+  // of rights edges between the same few object types) collapses into one merged
+  // hairball. A weak pull toward each kind's centroid gives the graph readable
+  // structure while the edge forces still shape the detail.
+  if (LAYOUT.cluster > 0) {
+    const cent = new Map();
+    for (const node of vis) {
+      const c = cent.get(node.kind) || { x: 0, y: 0, n: 0 };
+      c.x += node.x; c.y += node.y; c.n++;
+      cent.set(node.kind, c);
+    }
+    for (const node of vis) {
+      const c = cent.get(node.kind);
+      if (!c || c.n < 2) continue;
+      const out = disp.get(node);
+      out.x -= (node.x - c.x / c.n) * LAYOUT.cluster * k;
+      out.y -= (node.y - c.y / c.n) * LAYOUT.cluster * k;
+    }
+  }
+
   // 4. integrate, bounded by temperature; pinned nodes never move
   for (const node of vis) {
     if (node.fixed) continue;
@@ -580,7 +769,7 @@ function step() {
     node.y += out.y * lim;
   }
 
-  resolveCollisions(vis, grid);
+  for (let i = 0; i < LAYOUT.collidePasses; i++) resolveCollisions(vis, grid);
   temp *= LAYOUT.cooling;
 }
 
@@ -695,6 +884,29 @@ function drawMarkerPill(c, cx, cy, text, color) {
   c.restore();
 }
 
+// drawSourceRing outlines a node with the colour of the collection source(s)
+// that contributed it. A node present in several collections gets equal coloured
+// arcs, so a shared object is visibly shared rather than assigned to one source.
+function drawSourceRing(cx, cy, r, sources) {
+  if (!sources || !sources.length) return;
+  const rad = r + 1.6;
+  ctx.lineWidth = 1.6;
+  if (sources.length === 1) {
+    ctx.strokeStyle = sourceColor(sources[0]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+  const step = (Math.PI * 2) / sources.length;
+  for (let i = 0; i < sources.length; i++) {
+    ctx.strokeStyle = sourceColor(sources[i]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, i * step - Math.PI / 2, (i + 1) * step - Math.PI / 2);
+    ctx.stroke();
+  }
+}
+
 function draw() {
   if (!canvas || !ctx || !canvas.parentElement) return;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -799,6 +1011,11 @@ function draw() {
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
     ctx.fillStyle = COLORS[node.kind] || "#888";
     ctx.fill();
+
+    // Source ring: a thin coloured ring identifies which collection contributed
+    // the node, so a graph that merges two datasets still reads as two distinct
+    // groups. A node shared by several collections gets a split multi-colour ring.
+    if (currentSources.length > 1) drawSourceRing(p.x, p.y, r, node.sources);
 
     // Path ring: keep the category fill, add a soft glow plus a crisp outer ring
     // so every intermediate node on a discovered route is unmistakable.
@@ -1202,13 +1419,20 @@ function syncGraphControls() {
 // Apply the toolbar node-kind filter, isolate mode and the header search.
 function applyFilters() {
   const nodeKind = val("nodeKindFilter");
+  const srcFilter = val("sourceFilter");
+  const dsFilter = val("datasetFilter");
   const searchQ = val("search").toLowerCase();
   const anchor = isolateMode ? (selectedNode || hoverNode) : null;
   const keep = anchor ? neighborhood(anchor) : null;
   for (const n of nodes) {
     const kindHide = !!(nodeKind && n.kind !== nodeKind);
+    // Source/Dataset filters: keep only entities contributed by the selected
+    // collection source or ingestion batch. Entities with no provenance (plain
+    // Upsert ingestion) appear only in the "All" view.
+    const srcHide = !!srcFilter && !(n.sources || []).includes(srcFilter);
+    const dsHide = !!dsFilter && !(n.batches || []).includes(dsFilter);
     const isolateHide = keep ? !keep.has(n.id) : false;
-    n.hidden = kindHide || isolateHide;
+    n.hidden = kindHide || srcHide || dsHide || isolateHide;
     const hay = `${n.name || ""} ${n.sam_account_name || ""} ${n.id} ${n.kind || ""}`.toLowerCase();
     n.match = matchIds.has(n.id);
     n.dim = (searchQ !== "" && !hay.includes(searchQ)) || (keep ? !keep.has(n.id) : false);
@@ -1616,9 +1840,24 @@ function renderNodeProvenance(n) {
   if (n.domain) rows.push(["domain", n.domain]);
   if (n.distinguished_name) rows.push(["dn", n.distinguished_name]);
   if (statsCache) rows.push(["graph_total", `${statsCache.nodes} nodes / ${statsCache.edges} edges`]);
-  const dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+  let dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+
+  const sources = n.sources || [];
+  const batches = n.batches || [];
+  let provNote;
+  if (sources.length) {
+    dl += `<dt>contributed_by</dt><dd>${sources.map((s) => esc(sourceLabel(s))).join(", ")}</dd>`;
+    if (batches.length) dl += `<dt>ingestion_batches</dt><dd>${batches.map((b) => esc(b)).join(", ")}</dd>`;
+    provNote = sources.length > 1
+      ? `This entity is present in more than one collection: ${sources.map((s) => esc(sourceLabel(s))).join(" + ")}. Use the Source filter to view one collection at a time.`
+      : `Contributed by ${esc(sourceLabel(sources[0]))}.`;
+  } else {
+    dl += `<dt>contributed_by</dt><dd>unattributed</dd>`;
+    provNote = "This entity has no ingestion provenance, so the collection source cannot be identified. That is the case for graphs written by a plain upsert rather than a tracked ingestion batch.";
+  }
+
   el.innerHTML = `<dl class="prov-dl">${dl}</dl>
-    <p class="muted small">The read API exposes graph structure only; collection-run metadata (collector name, run timestamps) is not persisted, so none is fabricated here. Entities are keyed by their stable identifier — the AD SID, or objectGUID when no SID exists.</p>`;
+    <p class="muted small">${provNote} Entities are keyed by their stable identifier — the AD SID, or objectGUID when no SID exists — so two collections of the same domain merge by identity rather than duplicating.</p>`;
 }
 
 
@@ -1653,6 +1892,17 @@ async function selectEdge(e) {
     } else {
       sessionNote.hidden = true;
       sessionNote.textContent = "";
+    }
+  }
+
+  // Provenance: which collection source(s)/ingestion batch(es) produced the edge.
+  const edgeProv = document.getElementById("edge-provenance");
+  if (edgeProv) {
+    const srcs = e.sources || [];
+    if (srcs.length) {
+      edgeProv.innerHTML = `<span class="muted">Contributed by</span> ${srcs.map((s) => `<span class="dataset-chip" style="display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:999px;background:var(--panel2);border:1px solid var(--line)"><i style="width:8px;height:8px;border-radius:50%;background:${sourceColor(s)}"></i>${esc(sourceLabel(s))}</span>`).join(" ")}`;
+    } else {
+      edgeProv.textContent = "Relationship source: unattributed (no ingestion provenance).";
     }
   }
 
@@ -3932,6 +4182,10 @@ function wireToolbar() {
   if (nodeKindFilter) nodeKindFilter.addEventListener("change", () => { applyFilters(); fitView(); });
   const edgeKindFilter = document.getElementById("edgeKindFilter");
   if (edgeKindFilter) edgeKindFilter.addEventListener("change", () => { applyFilters(); });
+  const sourceFilterEl = document.getElementById("sourceFilter");
+  if (sourceFilterEl) sourceFilterEl.addEventListener("change", () => { applyFilters(); fitView(); renderDatasetBanner(); });
+  const datasetFilterEl = document.getElementById("datasetFilter");
+  if (datasetFilterEl) datasetFilterEl.addEventListener("change", () => { applyFilters(); fitView(); renderDatasetBanner(); });
 
   // ---- Starting node picker (search / select / focus) ----
   wirePathSuggest("startNodeSearch", "startNodeRes", (id) => setStartNode(id));
@@ -4124,12 +4378,27 @@ async function refresh() {
   await loadGraph();
   populateDynamicFilters();
   await loadDomains();
+  loadWatermark();
   setLock(!!operatorToken);
   const active = parseHash();
   // Refresh effort for the currently-visible data view.
   if (["users", "groups", "computers", "ous", "gpos", "containers"].indexOf(active) !== -1) loadTable(active, 0);
   else if (active === "relationships") renderRelationships();
   else if (active === "overview") loadOverview();
+}
+
+// Stamp the OmenHound watermark with the server version, once. This is the
+// single attribution mark shown on the graph canvas.
+let watermarkLoaded = false;
+async function loadWatermark() {
+  if (watermarkLoaded) return;
+  watermarkLoaded = true;
+  const el = document.getElementById("watermark");
+  if (!el) return;
+  try {
+    const health = await apiGet("/api/v1/health");
+    if (health && health.version) el.textContent = `OmenHound · ${health.version}`;
+  } catch (_) { /* keep the default mark */ }
 }
 
 // Reload the graph and recompute the layout, then re-render the current view.

@@ -50,7 +50,7 @@ go install github.com/krazybeastx1/omenhound/cmd/omenhound@latest
 | **Collector** | `omenhound collect` | Enumerates AD over LDAP/LDAPS (users, groups, computers, membership) and emits Graph JSON. |
 | **Importer** | `omenhound import` | Parses **BloodHound CE / BloodHound.py `--zip`** output into Graph JSON, or pushes it straight into a running server. |
 | **Graph backend** | `omenhound serve` | Stores nodes/edges in **Neo4j** using the BloodHound CE schema (in-memory store for demos/tests). |
-| **Ingestion API + UI** | `omenhound serve` | HTTP service that ingests graphs and serves a force-directed attack-path UI. |
+| **Ingestion API + UI** | `omenhound serve` | HTTP service that ingests graphs and serves a force-directed attack-path UI. Every import is an **ingestion batch** with **per-entity provenance**, so the **Source**/**Dataset** filters and the dataset banner keep a native OmenHound collect and an imported BloodHound collection individually viewable. |
 | **Abuse engine** | *(in the UI/API)* | For every edge, renders a copy-pasteable command from **real node properties**, plus OPSEC and Windows event IDs. |
 | **Gated credential ops** | *(off by default)* | Optional `unicodePwd` password change over LDAPS behind token + per-action approval + audit. |
 | **Attack-path analytics** | `omenhound serve` | Fourteen canned queries (Kerberoastable, AS-REP, DCSync, LAPS, delegation, AdminTo, high-value…) at `/api/v1/analytics` and the **Attack Paths** UI view — each result lists its evidence and flags missing data. |

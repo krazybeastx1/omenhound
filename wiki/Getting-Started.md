@@ -22,7 +22,7 @@ go install github.com/krazybeastx1/omenhound/cmd/omenhound@latest
 omenhound version
 ```
 
-Pin a release with `@v0.1.0`. Prebuilt linux/macOS/Windows archives (with
+Pin a release with `@v0.4.0`. Prebuilt linux/macOS/Windows archives (with
 `checksums.txt`) are attached to each
 [release](https://github.com/krazybeastx1/omenhound/releases).
 
@@ -68,12 +68,37 @@ Plaintext LDAP is refused unless you explicitly opt in with `--allow-plaintext-l
 ```bash
 export OMENHOUND_PASSWORD='...'            # keep secrets out of argv/history
 
+# collector as a positional argument (recommended) ...
+./bin/omenhound collect ldap \
+  --domain htb.local --server dc01.htb.local \
+  --username 'htb.local\svc-alfresco' --password-stdin \
+  --allow-plaintext-ldap --out omenhound_ldap_htb_local.json
+
+# ... or via the flag, anywhere in the line
 ./bin/omenhound collect \
   --collector ldap \
   --domain corp.local --server dc01.corp.local \
   --ldaps --username 'CORP\svc_omenhound' \
   --password-stdin --out corp.json
 ```
+
+> **Why positional?** Go's `flag` package stops parsing at the first non-flag
+> token. `omenhound collect ldap …` (collector immediately after `collect`) is the
+> unambiguous form; a collector placed after another positional value would be
+> silently ignored.
+
+**Bind principal.** A simple bind normalizes `DNS-domain\user` and a bare
+`username` to `user@domain` when the domain contains a dot; a NetBIOS
+`CORP\user`, a full UPN, and a DN are passed through unchanged. This avoids the
+`data 52e: Invalid Credentials` you get when a server wants `user@domain` but
+receives `domain\user`.
+
+**File names describe themselves.** If `--out` is a directory (or omitted for
+`--zip`), the collector writes `<prefix>_<collector>_<domain>_<timestamp>.<ext>` —
+for example `omenhound_ldap_htb_local.json` for a native collect, or
+`bloodhound-import_HTB.LOCAL_…` for an imported dataset. The graph's
+`meta.collector` carries the same label, and the UI shows it as the collection
+**source**.
 
 ### BloodHound.py-compatible flags
 
@@ -171,9 +196,9 @@ in `Meta.Warnings`.
 
 One caveat on validation — the parsers and mappings are tested against
 **impacket**-generated descriptors and hand-built fixtures, and the SMB pass's
-filtering/resolution are unit-tested, but **the live LDAP and SMB/RPC paths have
-not yet been exercised against a real domain controller or host**, so treat first
-contact as unverified.
+filtering/resolution are unit-tested. LDAP collection, including a live simple
+bind against a real domain controller, has since been exercised end to end;
+**the live SMB/RPC paths have not**, so treat first SMB contact as unverified.
 
 See **[Coming from BloodHound.py](Coming-from-BloodHound-py)** for the full method table.
 
@@ -189,7 +214,7 @@ bloodhound-ce-python -d cascade.local -u s.smith -p '...' -ns 10.129.46.41 -c al
 # -> 20260101120000_cascade.local_bloodhound.zip
 
 # import it
-./bin/omenhound import --in 20260101120000_cascade.local_bloodhound.zip --out cascade.json
+./bin/omenhound import --in 20260101120000_cascade.local_bloodhound.zip --out bloodhound_import_cascade_local.json
 ```
 
 Or push it straight into a running server (needs `--api-token` on `serve`):
@@ -205,6 +230,26 @@ and reports anything it dropped rather than inventing results:
 import: 1284 nodes, 3610 edges, 12 placeholders from 7 file(s) (domain "CASCADE.LOCAL")
 import: ACE right names with no OmenHound edge (skipped): map[...]
 ```
+
+### Telling datasets apart (which JSON is which)
+
+A native OmenHound collect and an imported BloodHound collection describe the same
+domain, and the store **merges them by SID** — the same object from both is one
+node, not two. Name the files so the difference is obvious on disk, and let the
+batch/source list and the graph make it obvious in the UI:
+
+| | Native OmenHound collect | BloodHound import |
+|---|---|---|
+| Made by | `omenhound collect ldap …` | `bloodhound-ce-python … --zip` → `omenhound import` |
+| Example file | `omenhound_ldap_htb_local.json` | `bloodhound_import_htb_local.json` |
+| `meta.collector` | `ldap` | `bloodhound-import` |
+| UI source label | `OmenHound · LDAP` | `BloodHound import` |
+
+Each ingest is recorded as an **ingestion batch** whose **source** defaults to the
+graph's `meta.collector`. `/api/v1/graph` then attaches the contributing
+`sources`/`batches` to every node and edge, and the web UI's **Source** filter,
+legend and **dataset banner** (with a one-at-a-time stepper) let you view one
+collection at a time so the graphs never overlap into one bulk.
 
 ---
 

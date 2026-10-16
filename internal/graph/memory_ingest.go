@@ -72,6 +72,60 @@ func (m *Memory) ApplyBatch(_ context.Context, batch *IngestBatch, nodes []model
 	return c, nil
 }
 
+// NodeProvenance implements Provenance: node ID -> contributing sources/batches.
+func (m *Memory) NodeProvenance(_ context.Context) (map[string]EntityProvenance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]EntityProvenance, len(m.nodeProv))
+	for id, set := range m.nodeProv {
+		if p := m.provFor(set); len(p.Sources) > 0 || len(p.Batches) > 0 {
+			out[id] = p
+		}
+	}
+	return out, nil
+}
+
+// EdgeProvenance implements Provenance: "source|kind|target" -> sources/batches.
+func (m *Memory) EdgeProvenance(_ context.Context) (map[string]EntityProvenance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]EntityProvenance, len(m.edgeProv))
+	for k, set := range m.edgeProv {
+		e, ok := m.edges[k]
+		if !ok {
+			continue
+		}
+		if p := m.provFor(set); len(p.Sources) > 0 || len(p.Batches) > 0 {
+			out[PublicEdgeKey(e)] = p
+		}
+	}
+	return out, nil
+}
+
+// provFor resolves a set of batch ids into the sorted source labels and batch
+// ids that contributed an entity. Legacy ingestion (plain Upsert, no batch)
+// contributes nothing and is reported as unattributed rather than guessed at.
+func (m *Memory) provFor(set map[string]struct{}) EntityProvenance {
+	var p EntityProvenance
+	seen := make(map[string]struct{}, len(set))
+	for bid := range set {
+		p.Batches = append(p.Batches, bid)
+		if b, ok := m.batches[bid]; ok {
+			s := strings.TrimSpace(b.Source)
+			if s == "" {
+				continue
+			}
+			if _, dup := seen[s]; !dup {
+				seen[s] = struct{}{}
+				p.Sources = append(p.Sources, s)
+			}
+		}
+	}
+	sort.Strings(p.Batches)
+	sort.Strings(p.Sources)
+	return p
+}
+
 // putEdgeLocked inserts an edge into the edge map and both adjacency maps.
 func (m *Memory) putEdgeLocked(e model.Edge, k string) {
 	m.edges[k] = e

@@ -16,25 +16,46 @@ All request/response bodies are JSON. Write endpoints require
   "domain": "omenhound.lab",
   "sam_account_name": "jdoe",
   "distinguished_name": "CN=JDOE,OU=Users,DC=omenhound,DC=lab",
-  "props": { "enabled": "true", "admincount": "1" }
+  "props": { "enabled": "true", "admincount": "1" },
+  "sources": ["ldap"],
+  "batches": ["batch_20261016T071035.123_a1b2c3d4e5"]
 }
 ```
 
-`kind` ∈ `User | Group | Computer | Domain | OU | GPO | Container | Trust | Base`.
+`sources` and `batches` are present when the store tracks ingestion provenance (in-memory store).
 
 ### Edge
 
 ```json
 { "source": "S-1-5-...-1103", "target": "S-1-5-...-512", "kind": "GenericAll",
-  "props": { "inherited": "true" } }
+  "props": { "inherited": "true" },
+  "sources": ["bloodhound-import"],
+  "batches": ["batch_20261016T071035.456_f7e8055120"] }
 ```
 
 ### Graph
 
 ```json
-{ "nodes": [ /* Node */ ], "edges": [ /* Edge */ ],
-  "meta": { "collector": "ldap", "version": "…", "domain": "…",
-            "started_at": "…", "finished_at": "…", "warnings": ["…"] } }
+{
+  "nodes": [ /* Node */ ],
+  "edges": [ /* Edge */ ],
+  "meta": {
+    "collector": "ldap",
+    "version": "4.1.01-omenhound",
+    "domain": "omenhound.lab",
+    "started_at": "...",
+    "finished_at": "...",
+    "warnings": ["..."]
+  },
+  "sources": [
+    { "name": "ldap", "nodes": 106, "edges": 32 }
+  ],
+  "datasets": [
+    { "id": "batch_20261016T071035.123_a1b2c3d4e5", "source": "ldap", "domain": "omenhound.lab",
+      "mode": "merge", "status": "completed", "created_at": "...",
+      "nodes_created": 106, "edges_created": 32 }
+  ]
+}
 ```
 
 ---
@@ -44,7 +65,7 @@ All request/response bodies are JSON. Write endpoints require
 ### `GET /api/v1/health`
 
 ```json
-{ "status": "ok", "version": "f7e8055", "credential_ops_enabled": false,
+{ "status": "ok", "version": "4.1.01-omenhound", "credential_ops_enabled": false,
   "write_api_enabled": true, "time": "2026-10-10T12:18:03Z" }
 ```
 
@@ -56,7 +77,9 @@ All request/response bodies are JSON. Write endpoints require
 
 ### `GET /api/v1/graph`
 
-Returns the entire graph as a `Graph` object (see above). This is what the UI loads.
+Returns the entire graph as a `Graph` object (see above). This is what the UI loads. When provenance tracking is
+available (in-memory store), every node and edge include `sources` and `batches`, and the response adds
+`sources` (per-collection counts) and `datasets` (ingestion batches).
 
 ### `GET /api/v1/nodes?limit=&offset=`
 
