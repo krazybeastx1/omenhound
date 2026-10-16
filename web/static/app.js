@@ -1439,6 +1439,10 @@ function applyFilters() {
   }
   const centerBtn = document.getElementById("centerSelection");
   if (centerBtn) centerBtn.disabled = !(selectedNode || selectedEdge);
+  const focusStartBtn = document.getElementById("focusStart");
+  const focusTargetBtn = document.getElementById("focusTarget");
+  if (focusStartBtn) focusStartBtn.disabled = !startNode;
+  if (focusTargetBtn) focusTargetBtn.disabled = !targetNode;
   syncGraphControls();
   requestRender();
 }
@@ -1518,6 +1522,22 @@ function setTargetNode(id) {
   return n;
 }
 
+function focusStart() {
+  const s = startNode();
+  if (!s) return;
+  centerNode(s, 1.25, 160);
+  selectedNode = s;
+  selectNode(s);
+}
+
+function focusTarget() {
+  const t = targetNode();
+  if (!t) return;
+  centerNode(t, 1.25, 160);
+  selectedNode = t;
+  selectNode(t);
+}
+
 // Reflect start/target/selection state in the toolbar chips, buttons and hints.
 function updateStartUI() {
   const s = startNode(), t = targetNode();
@@ -1547,8 +1567,10 @@ function updateStartUI() {
     else if (selectedEdge) summary.textContent = `Selected: ${truncate(selectedEdge.kind, 24)} relationship`;
     else summary.textContent = pathHighlight ? "Path highlighted" : "Nothing selected";
   }
-  const hint = document.getElementById("startHint");
-  if (hint) hint.textContent = s ? `Starting node: ${nodeLabel(s)} — use “⇄ Paths” to analyse from here.` : "Tip: choose a “Start from…” entity to anchor path analysis.";
+  const focusStartBtn2 = document.getElementById("focusStart");
+  const focusTargetBtn2 = document.getElementById("focusTarget");
+  if (focusStartBtn2) focusStartBtn2.disabled = !startNode();
+  if (focusTargetBtn2) focusTargetBtn2.disabled = !targetNode();
   const clearBtn = document.getElementById("clearPathHighlight");
   if (clearBtn) clearBtn.hidden = !pathHighlight;
   const runBtn = document.getElementById("findPathsRun");
@@ -4182,6 +4204,10 @@ function wireToolbar() {
   if (nodeKindFilter) nodeKindFilter.addEventListener("change", () => { applyFilters(); fitView(); });
   const edgeKindFilter = document.getElementById("edgeKindFilter");
   if (edgeKindFilter) edgeKindFilter.addEventListener("change", () => { applyFilters(); });
+  const focusStartBtn = document.getElementById("focusStart");
+  if (focusStartBtn) focusStartBtn.addEventListener("click", focusStart);
+  const focusTargetBtn = document.getElementById("focusTarget");
+  if (focusTargetBtn) focusTargetBtn.addEventListener("click", focusTarget);
   const sourceFilterEl = document.getElementById("sourceFilter");
   if (sourceFilterEl) sourceFilterEl.addEventListener("change", () => { applyFilters(); fitView(); renderDatasetBanner(); });
   const datasetFilterEl = document.getElementById("datasetFilter");
